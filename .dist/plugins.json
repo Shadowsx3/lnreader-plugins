@@ -1910,16 +1910,6 @@
 		"iconUrl": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/public/static/multisrc/mtlnovel/mtlnovel/icon.png"
 	},
 	{
-		"id": "nova",
-		"name": "Nova Updates",
-		"site": "https://www.novelupdates.com/",
-		"lang": "Español",
-		"version": "0.9.4",
-		"url": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/.js/src/plugins/spanish/nova.js",
-		"iconUrl": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/public/static/src/es/nova/icon.png",
-		"customCSS": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/public/static/src/en/novelupdates/customCSS.css"
-	},
-	{
 		"id": "novelasligera",
 		"name": "Novelas Ligera",
 		"site": "https://novelasligera.com/",
@@ -1927,6 +1917,15 @@
 		"version": "1.0.0",
 		"url": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/.js/src/plugins/spanish/novelasligera.js",
 		"iconUrl": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/public/static/src/es/novelasligera/icon.png"
+	},
+	{
+		"id": "novelasligeras.net",
+		"name": "NOVA",
+		"site": "https://novelasligeras.net",
+		"lang": "Español",
+		"version": "1.0.1",
+		"url": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/.js/src/plugins/spanish/nova.js",
+		"iconUrl": "https://raw.githubusercontent.com/Shadowsx3/lnreader-plugins/plugins/v3.0.0/public/static/src/es/nova/icon.png"
 	},
 	{
 		"id": "oasistranslations",
