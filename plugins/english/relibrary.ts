@@ -3,7 +3,6 @@ import { Plugin } from '@/types/plugin';
 import { Filters } from '@libs/filterInputs';
 import { load as loadCheerio } from 'cheerio';
 import { defaultCover } from '@libs/defaultCover';
-import { NovelItem } from '../../test_web/static/js';
 import { NovelStatus } from '@libs/novelStatus';
 
 type FuzzySearchOptions = {
@@ -164,7 +163,7 @@ class ReLibraryPlugin implements Plugin.PluginBase {
   name = 'Re:Library';
   icon = 'src/en/relibrary/icon.png';
   site = 'https://re-library.com';
-  version = '1.0.2';
+  version = '1.0.4';
   imageRequestInit: Plugin.ImageRequestInit = {
     headers: {
       Referer: 'https://re-library.com/',
@@ -179,54 +178,55 @@ class ReLibraryPlugin implements Plugin.PluginBase {
   private async popularNovelsInner(url: string): Promise<Plugin.NovelItem[]> {
     const novels: Plugin.NovelItem[] = [];
     const result = await fetchApi(url);
+    if (!result.ok) {
+      throw Object.assign(
+        new Error(`Could not load ${url} (HTTP ${result.status})`),
+        { status: result.status, response: result },
+      );
+    }
     const body = await result.text();
 
     const loadedCheerio = loadCheerio(body);
-    loadedCheerio('.entry-content > ol > li').each((_i, el) => {
-      const novel: Partial<NovelItem> = {};
-      novel.name = loadedCheerio(el).find('h3 > a').text();
-      novel.path = loadedCheerio(el)
-        .find('table > tbody > tr > td > a')
-        .attr('href');
-      if (novel.name === undefined || novel.path === undefined) return;
-      novel.cover =
-        loadedCheerio(el)
-          .find('table > tbody > tr > td > a > img')
-          .attr('data-cfsrc') ||
-        loadedCheerio(el)
-          .find('table > tbody > tr > td > a > img')
-          .attr('src') ||
-        defaultCover;
-      if (novel.path.startsWith(this.site)) {
-        novel.path = novel.path.slice(this.site.length);
-      }
-      novels.push(novel as Plugin.NovelItem);
-    });
+    loadedCheerio('.relibrary-top-novels .relibrary-novel-card').each(
+      (_i, el) => {
+        const novel: Partial<Plugin.NovelItem> = {};
+        const title = loadedCheerio(el).find('.relibrary-title a');
+        novel.name = title.text().trim();
+        novel.path = title.attr('href');
+        if (!novel.name || novel.path === undefined) return;
+        const cover = loadedCheerio(el).find('img.relibrary-cover');
+        novel.cover =
+          cover.attr('data-cfsrc') || cover.attr('src') || defaultCover;
+        novel.path = new URL(novel.path, this.site).pathname;
+        novels.push(novel as Plugin.NovelItem);
+      },
+    );
     return novels;
   }
 
   private async lastestNovelsInner(url: string): Promise<Plugin.NovelItem[]> {
     const novels: Plugin.NovelItem[] = [];
     const result = await fetchApi(url);
+    if (!result.ok) {
+      throw Object.assign(
+        new Error(`Could not load ${url} (HTTP ${result.status})`),
+        { status: result.status, response: result },
+      );
+    }
     const body = await result.text();
 
     const loadedCheerio = loadCheerio(body);
     loadedCheerio('article.type-page.page').each((_i, el) => {
       const novel: Partial<Plugin.NovelItem> = {};
-      novel.name = loadedCheerio(el).find('.entry-title').text();
-      novel.path = loadedCheerio(el).find('.entry-title a').attr('href');
-      if (novel.path === undefined || novel.name === undefined) return;
+      // The title heading also wraps the novel card, so only read its link.
+      const title = loadedCheerio(el).find('.entry-title > a').first();
+      novel.name = title.text().trim();
+      novel.path = title.attr('href');
+      if (!novel.name || novel.path === undefined) return;
+      const cover = loadedCheerio(el).find('img.relibrary-cover');
       novel.cover =
-        loadedCheerio(el)
-          .find('.entry-content > table > tbody > tr > td > a >img')
-          .attr('data-cfsrc') ||
-        loadedCheerio(el)
-          .find('.entry-content > table > tbody > tr > td > a >img')
-          .attr('src') ||
-        defaultCover;
-      if (novel.path.startsWith(this.site)) {
-        novel.path = novel.path.slice(this.site.length);
-      }
+        cover.attr('data-cfsrc') || cover.attr('src') || defaultCover;
+      novel.path = new URL(novel.path, this.site).pathname;
       novels.push(novel as Plugin.NovelItem);
     });
     return novels;
@@ -257,7 +257,7 @@ class ReLibraryPlugin implements Plugin.PluginBase {
     // synopis:		.entry-content > div.su-box > div.su-box-content
     // chapters:	.entry-content > div.su-accordion <then> li.page_item[]
 
-    const result = await fetchApi(`${this.site}/${novelPath}`);
+    const result = await fetchApi(`${this.site}${novelPath}`);
     const body = await result.text();
 
     const loadedCheerio = loadCheerio(body);
@@ -330,18 +330,11 @@ class ReLibraryPlugin implements Plugin.PluginBase {
         .find('li > a')
         .each((_i2, chap_el) => {
           chapter_idx += 1;
-          let chap_path = loadedCheerio(chap_el).attr('href')?.trim();
-          if (
-            loadedCheerio(chap_el).text() === undefined ||
-            chap_path === undefined
-          )
-            return;
-          if (chap_path.startsWith(this.site)) {
-            chap_path = chap_path.slice(this.site.length);
-          }
+          const chap_path = loadedCheerio(chap_el).attr('href')?.trim();
+          if (loadedCheerio(chap_el).text() === undefined || !chap_path) return;
           chapters.push({
             name: loadedCheerio(chap_el).text(),
-            path: chap_path,
+            path: new URL(chap_path, this.site).pathname,
             chapterNumber: chapter_idx,
             // we KNOW that we can't get the released time (at least without any additional fetches), so set it to null purposfully
             releaseTime: null,
@@ -355,12 +348,33 @@ class ReLibraryPlugin implements Plugin.PluginBase {
 
   async parseChapter(chapterPath: string): Promise<string> {
     // parse chapter text here
-    const result = await fetchApi(`${this.site}/${chapterPath}`);
+    const result = await fetchApi(`${this.site}${chapterPath}`);
+    if (!result.ok) {
+      throw Object.assign(
+        new Error(
+          `Could not load chapter ${chapterPath} (HTTP ${result.status})`,
+        ),
+        { status: result.status, response: result },
+      );
+    }
     const body = await result.text();
 
     const loadedCheerio = loadCheerio(body);
 
     const entryContent = loadedCheerio('.entry-content');
+
+    // Early access chapters only show a password form until they unlock.
+    const passwordForm = entryContent.find('form.post-password-form');
+    if (passwordForm.length) {
+      const unlock = passwordForm
+        .find('.ppw-pcp-pf-desc-below-form')
+        .text()
+        .trim();
+      throw new Error(
+        `This chapter is password protected (early access) on Re:Library${unlock ? ` ${unlock}` : ''}`,
+      );
+    }
+
     const pageLinkHr = entryContent.find('.PageLink + hr').first();
     if (pageLinkHr.length) {
       // Remove all previous siblings before the .PageLink + hr
@@ -373,7 +387,12 @@ class ReLibraryPlugin implements Plugin.PluginBase {
       if (pageLink.length) {
         pageLink.remove();
       }
-      pageLinkHr.next().remove();
+      // The credits table follows the top navigation, either on its own or
+      // as the first child of a wrapper (div.ppw-restricted-content) that
+      // holds the whole chapter, so only remove the table itself.
+      const afterNav = pageLinkHr.next();
+      if (afterNav.is('table')) afterNav.remove();
+      else afterNav.children().first().filter('table').remove();
       pageLinkHr.remove();
     }
 
@@ -390,7 +409,33 @@ class ReLibraryPlugin implements Plugin.PluginBase {
       hrAfterPageLink.remove();
     }
 
-    return entryContent.html() || '';
+    // The app renders this HTML as is, so drop event handlers and URLs that
+    // would run script.
+    entryContent.find('script, style, noscript').remove();
+    entryContent.find('*').each((_i, el) => {
+      const node = loadedCheerio(el);
+      for (const name of Object.keys(el.attribs)) {
+        if (/^on/i.test(name)) {
+          node.removeAttr(name);
+        } else if (name === 'href' || name === 'src') {
+          const value = el.attribs[name]
+            .split('')
+            .filter(c => c.charCodeAt(0) > 32)
+            .join('')
+            .toLowerCase();
+          if (
+            /^(javascript|vbscript):/.test(value) ||
+            (value.startsWith('data:') && !value.startsWith('data:image/'))
+          ) {
+            node.removeAttr(name);
+          }
+        }
+      }
+    });
+
+    const html = entryContent.html()?.trim();
+    if (!html) throw new Error(`No chapter text found at ${chapterPath}`);
+    return html;
   }
 
   async searchNovels(
@@ -408,10 +453,11 @@ class ReLibraryPlugin implements Plugin.PluginBase {
 
     loadedCheerio('article article').each((_i, el) => {
       const e = loadedCheerio(el);
-      if (e.find('a').attr('href') && e.find('a').text()) {
+      const href = e.find('a').attr('href');
+      if (href && e.find('a').text()) {
         novels.push({
           name: e.find('h4').text(),
-          path: e.find('a').attr('href')?.replace(this.site, '') || '',
+          path: new URL(href, this.site).pathname,
           cover:
             e.find('img').attr('data-cfsrc') ||
             e.find('img').attr('src') ||

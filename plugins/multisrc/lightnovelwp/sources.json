@@ -10,13 +10,23 @@
   },
   {
     "id": "kolnovel",
-    "sourceSite": "https://kolnovel.site/",
+    "sourceSite": "https://kolnovel.com/",
     "sourceName": "Kol Novel",
     "options": {
       "lang": "Arabic",
       "reverseChapters": true,
       "customJs": "$('article > style').text().match(/\\.\\w+(?=\\s*[,{])/g)?.forEach(tag => $(`p${tag}`).remove());$('.epcontent .code-block').remove();",
-      "versionIncrements": 9
+      "versionIncrements": 10
+    }
+  },
+  {
+    "id": "freekolnovel",
+    "sourceSite": "https://free.kolnovel.com/",
+    "sourceName": "Free Kol Novel",
+    "options": {
+      "lang": "Arabic",
+      "reverseChapters": true,
+      "customJs": "$('article > style').text().match(/\\.\\w+(?=\\s*[,{])/g)?.forEach(tag => $(`p${tag}`).remove());$('.epcontent .code-block').remove();"
     }
   },
   {
@@ -43,7 +53,9 @@
     "sourceName": "AllNovelRead",
     "options": {
       "lang": "Spanish",
-      "reverseChapters": true
+      "reverseChapters": true,
+      "down": true,
+      "downSince": 1768289212954
     }
   },
   {
@@ -96,7 +108,9 @@
     "sourceName": "Panda Machine Translations",
     "options": {
       "lang": "English",
-      "reverseChapters": true
+      "reverseChapters": true,
+      "down": true,
+      "downSince": 1768289212928
     }
   },
   {
@@ -153,7 +167,9 @@
     "options": {
       "versionIncrements": 1,
       "lang": "English",
-      "reverseChapters": true
+      "reverseChapters": true,
+      "down": true,
+      "downSince": 1768289212919
     }
   },
   {
@@ -171,7 +187,9 @@
     "sourceName": "ElloTL",
     "options": {
       "lang": "English",
-      "reverseChapters": true
+      "reverseChapters": true,
+      "down": true,
+      "downSince": 1768289212947
     }
   },
   {
@@ -189,7 +207,9 @@
     "sourceName": "CPUnovel",
     "options": {
       "lang": "English",
-      "reverseChapters": true
+      "reverseChapters": true,
+      "down": true,
+      "downSince": 1768289212904
     }
   },
   {
@@ -208,7 +228,9 @@
     "sourceSite": "https://betternovels.net/",
     "sourceName": "Better Novels",
     "options": {
-      "lang": "Portuguese"
+      "lang": "Portuguese",
+      "down": true,
+      "downSince": 1768289212945
     }
   },
   {
@@ -264,22 +286,59 @@
     "sourceName": "Keopi Translations",
     "options": {
       "lang": "English",
-      "reverseChapters": true
+      "reverseChapters": true,
+      "down": true,
+      "downSince": 1768289212914
     }
   },
   {
     "id": "TCSega",
-    "sourceSite": "https://teamchmantranslations.com",
+    "sourceSite": "https://teamchmantranslations.com/",
     "sourceName": "TC & Sega",
     "options": {
       "lang": "Spanish",
-      "reverseChapters": true
+      "reverseChapters": true,
+      "versionIncrements": 1
     }
   },
   {
     "id": "transweaver",
     "sourceSite": "https://transweaver.com/",
     "sourceName": "Translation Weaver",
+    "options": {
+      "lang": "English",
+      "reverseChapters": true
+    }
+  },
+  {
+    "id": "hyacinthbloom",
+    "sourceSite": "https://hyacinthbloom.com/",
+    "sourceName": "Hyacinth in Bloom",
+    "options": {
+      "lang": "English",
+      "reverseChapters": true,
+      "hasLocked": true
+    }
+  },
+  {
+    "id": "blumeverse",
+    "sourceSite": "https://blume-verse.com/",
+    "sourceName": "BlumeVerse",
+    "options": {
+      "lang": "English",
+      "reverseChapters": true,
+      "hasLocked": true
+    }
+  },
+  {
+    "id": "dobynovels",
+    "sourceSite": "https://dobynovels.com/",
+    "sourceName": "DobyNovels"
+  },
+  {
+    "id": "ossantl",
+    "sourceSite": "https://ossantl.my.id/",
+    "sourceName": "OssanTL",
     "options": {
       "lang": "English",
       "reverseChapters": true

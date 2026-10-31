@@ -1,14 +1,23 @@
 import { fetchApi } from '@libs/fetch';
 import { Filters } from '@libs/filterInputs';
 import { Plugin } from '@/types/plugin';
-import { Cheerio, AnyNode, CheerioAPI, load as parseHTML } from 'cheerio';
+import { Cheerio, CheerioAPI, load as parseHTML } from 'cheerio';
+import { AnyNode, Element } from 'domhandler';
 import { defaultCover } from '@libs/defaultCover';
 import { NovelStatus } from '@libs/novelStatus';
 import dayjs from 'dayjs';
 import { storage } from '@libs/storage';
 
-const includesAny = (str: string, keywords: string[]) =>
-  new RegExp(keywords.join('|')).test(str);
+const SECOND_REGEX = /detik|segundo|second|วินาที/i;
+const MINUTE_REGEX = /menit|dakika|min|minute|minuto|นาที|دقائق/i;
+const HOUR_REGEX = /jam|saat|heure|hora|hour|ชั่วโมง|giờ|ore|ساعة|小时/i;
+const DAY_REGEX = /hari|gün|jour|día|dia|day|วัน|ngày|giorni|أيام|天/i;
+const WEEK_REGEX = /week|semana/i;
+const MONTH_REGEX = /month|mes/i;
+const YEAR_REGEX = /year|año/i;
+
+const REVERSE_ALPHA = 'zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA';
+const FORWARD_ALPHA = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 type MadaraOptions = {
   useNewChapterEndpoint?: boolean;
@@ -17,6 +26,8 @@ type MadaraOptions = {
   versionIncrements?: number;
   customJs?: string;
   hasLocked?: boolean;
+  browserHeaders?: boolean;
+  resolveCoverDataUri?: boolean;
 };
 
 export type MadaraMetadata = {
@@ -24,10 +35,10 @@ export type MadaraMetadata = {
   sourceSite: string;
   sourceName: string;
   options?: MadaraOptions;
-  filters?: any;
+  filters?: Filters;
 };
 
-class MadaraPlugin implements Plugin.PluginBase {
+export class MadaraPlugin implements Plugin.PluginBase {
   id: string;
   name: string;
   icon: string;
@@ -37,7 +48,9 @@ class MadaraPlugin implements Plugin.PluginBase {
   filters?: Filters | undefined;
 
   hideLocked = storage.get('hideLocked');
-  pluginSettings?: Record<string, any>;
+  pluginSettings?: Filters;
+
+  private dateCache = new Map<string, string>();
 
   constructor(metadata: MadaraMetadata) {
     this.id = metadata.id;
@@ -45,7 +58,7 @@ class MadaraPlugin implements Plugin.PluginBase {
     this.icon = `multisrc/madara/${metadata.id.toLowerCase()}/icon.png`;
     this.site = metadata.sourceSite;
     const versionIncrements = metadata.options?.versionIncrements || 0;
-    this.version = `1.0.${8 + versionIncrements}`;
+    this.version = `2.3.${versionIncrements}`;
     this.options = metadata.options;
     this.filters = metadata.filters;
 
@@ -60,6 +73,18 @@ class MadaraPlugin implements Plugin.PluginBase {
     }
   }
 
+  // Opt-in for sites whose bot check rejects fetchApi's wildcard Accept
+  // headers (e.g. lovelyblossoms.com, see #2599). The app's User-Agent is
+  // left untouched so WebView clearance cookies still match.
+  get requestHeaders(): Record<string, string> | undefined {
+    if (!this.options?.browserHeaders) return undefined;
+    return {
+      'Accept':
+        'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+  }
+
   translateDragontea(text: Cheerio<AnyNode>): Cheerio<AnyNode> {
     if (this.id !== 'dragontea') return text;
 
@@ -69,8 +94,6 @@ class MadaraPlugin implements Plugin.PluginBase {
         ?.replace('\n', '')
         .replace(/<br\s*\/?>/g, '\n') || '',
     );
-    const reverseAlpha = 'zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA';
-    const forwardAlpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
     text.html($.html());
     text
@@ -86,9 +109,9 @@ class MadaraPlugin implements Plugin.PluginBase {
           .split('')
           .map(char => {
             const base = char.normalize('NFC');
-            const idx = forwardAlpha.indexOf(base);
+            const idx = FORWARD_ALPHA.indexOf(base);
             return idx >= 0
-              ? reverseAlpha[idx] + char.slice(base.length)
+              ? REVERSE_ALPHA[idx] + char.slice(base.length)
               : char;
           })
           .join('');
@@ -106,13 +129,14 @@ class MadaraPlugin implements Plugin.PluginBase {
   }
 
   async getCheerio(url: string, search: boolean): Promise<CheerioAPI> {
-    const r = await fetchApi(url);
+    const r = await fetchApi(url, { headers: this.requestHeaders });
     if (!r.ok && search != true)
       throw new Error(
         'Could not reach site (' + r.status + ') try to open in webview.',
       );
-    const $ = parseHTML(await r.text());
-    const title = $('title').text().trim();
+    const text = await r.text();
+    const titleMatch = text.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].trim() : '';
     if (
       this.getHostname(url) != this.getHostname(r.url) ||
       title == 'Bot Verification' ||
@@ -122,7 +146,27 @@ class MadaraPlugin implements Plugin.PluginBase {
       title == 'Redirecting...'
     )
       throw new Error('Captcha error, please open in webview');
-    return $;
+    return parseHTML(text);
+  }
+
+  extractCover(image: Cheerio<AnyNode>): string {
+    const candidates = [
+      image.attr('data-lazy-src'),
+      image.attr('data-src'),
+      image.attr('data-cfsrc'),
+      image.attr('data-srcset')?.split(' ')[0],
+      image.attr('data-lazy-srcset')?.split(' ')[0],
+      image.attr('srcset')?.split(' ')[0],
+      image.attr('src'),
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate && !candidate.includes('dflazy')) {
+        return candidate;
+      }
+    }
+
+    return defaultCover;
   }
 
   parseNovels(loadedCheerio: CheerioAPI): Plugin.NovelItem[] {
@@ -132,29 +176,74 @@ class MadaraPlugin implements Plugin.PluginBase {
 
     loadedCheerio('.page-item-detail, .c-tabs-item__content').each(
       (index, element) => {
-        const novelName = loadedCheerio(element)
-          .find('.post-title')
-          .text()
-          .trim();
-        const novelUrl =
-          loadedCheerio(element).find('.post-title').find('a').attr('href') ||
-          '';
+        const $el = loadedCheerio(element);
+        const $title = $el.find('.post-title');
+        const novelName = $title.text().trim();
+        const novelUrl = $title.find('a').attr('href') || '';
         if (!novelName || !novelUrl) return;
-        const image = loadedCheerio(element).find('img');
-        const novelCover =
-          image.attr('data-src') ||
-          image.attr('src') ||
-          image.attr('data-lazy-srcset') ||
-          defaultCover;
+        const novelCover = this.extractCover($el.find('img'));
+
         const novel: Plugin.NovelItem = {
           name: novelName,
           cover: novelCover,
-          path: novelUrl.replace(/https?:\/\/.*?\//, '/'),
+          path: novelUrl.replace(/https?:\/\/.*?\//, ''),
         };
         novels.push(novel);
       },
     );
 
+    return novels;
+  }
+
+  async resolveCoverAsDataUri(url: string): Promise<string> {
+    if (!url || !url.startsWith('http') || url.startsWith('data:')) return url;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const controller =
+        typeof AbortController !== 'undefined' ? new AbortController() : null;
+      timeout = controller ? setTimeout(() => controller.abort(), 4000) : null;
+      const res = await fetchApi(url, {
+        headers: this.requestHeaders,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (!res.ok) return url;
+      const blob = await res.blob();
+      return await new Promise<string>(resolve => {
+        const FileReaderClass =
+          typeof FileReader !== 'undefined'
+            ? FileReader
+            : (globalThis as unknown as { FileReader?: typeof FileReader })
+                .FileReader;
+        if (!FileReaderClass) return resolve(url);
+        const fr = new FileReaderClass();
+        fr.onloadend = () => {
+          if (typeof fr.result === 'string') {
+            resolve(fr.result);
+          } else {
+            resolve(url);
+          }
+        };
+        fr.onerror = () => resolve(url);
+        fr.readAsDataURL(blob);
+      });
+    } catch {
+      return url;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  async resolveNovelsCovers(
+    novels: Plugin.NovelItem[],
+  ): Promise<Plugin.NovelItem[]> {
+    if (!this.options?.resolveCoverDataUri) return novels;
+    await Promise.all(
+      novels.map(async novel => {
+        if (novel.cover && novel.cover.startsWith('http')) {
+          novel.cover = await this.resolveCoverAsDataUri(novel.cover);
+        }
+      }),
+    );
     return novels;
   }
 
@@ -165,7 +254,8 @@ class MadaraPlugin implements Plugin.PluginBase {
       showLatestNovels,
     }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
-    let url = this.site + '/page/' + pageNo + '/?s=&post_type=wp-manga';
+    const baseUrl = this.site.replace(/\/+$/, '');
+    let url = `${baseUrl}/page/${pageNo}/?s=&post_type=wp-manga`;
     if (!filters) filters = this.filters || {};
     if (showLatestNovels) url += '&m_orderby=latest';
     for (const key in filters) {
@@ -175,11 +265,37 @@ class MadaraPlugin implements Plugin.PluginBase {
       else if (filters[key].value) url += `&${key}=${filters[key].value}`;
     }
     const loadedCheerio = await this.getCheerio(url, pageNo != 1);
-    return this.parseNovels(loadedCheerio);
+    const novels = this.parseNovels(loadedCheerio);
+    return await this.resolveNovelsCovers(novels);
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
-    let loadedCheerio = await this.getCheerio(this.site + novelPath, false);
+    const baseUrl = this.site.replace(/\/+$/, '');
+    const cleanPath = novelPath.replace(/^\/+/, '');
+    const novelUrl = novelPath.startsWith('http')
+      ? novelPath
+      : `${baseUrl}/${cleanPath}`;
+
+    let loadedCheerio: CheerioAPI;
+    let initialChapterHtmlPromise: Promise<string> | null = null;
+    const chapterEndpointUrl = `${novelUrl.replace(/\/+$/, '')}/ajax/chapters/`;
+
+    if (this.options?.useNewChapterEndpoint) {
+      initialChapterHtmlPromise = fetchApi(chapterEndpointUrl, {
+        method: 'POST',
+        headers: this.requestHeaders,
+        referrer: novelUrl,
+      })
+        .then((res: Response) => res.text())
+        .catch(() => '');
+
+      [loadedCheerio] = await Promise.all([
+        this.getCheerio(novelUrl, false),
+        initialChapterHtmlPromise,
+      ]);
+    } else {
+      loadedCheerio = await this.getCheerio(novelUrl, false);
+    }
 
     loadedCheerio('.manga-title-badges, #manga-title span').remove();
     const novel: Plugin.SourceNovel = {
@@ -191,11 +307,7 @@ class MadaraPlugin implements Plugin.PluginBase {
         '',
     };
 
-    novel.cover =
-      loadedCheerio('.summary_image > a > img').attr('data-lazy-src') ||
-      loadedCheerio('.summary_image > a > img').attr('data-src') ||
-      loadedCheerio('.summary_image > a > img').attr('src') ||
-      defaultCover;
+    novel.cover = this.extractCover(loadedCheerio('.summary_image > a > img'));
 
     loadedCheerio('.post-content_item, .post-content').each(function () {
       const detailName = loadedCheerio(this).find('h5').text().trim();
@@ -233,6 +345,11 @@ class MadaraPlugin implements Plugin.PluginBase {
         case 'المؤلف':
         case 'المؤلف (ين)':
           novel.author = detail.text().trim();
+          break;
+        case 'Translator(s)':
+        case 'Translator':
+        case 'Translators':
+          if (!novel.author) novel.author = detail.text().trim();
           break;
         case 'Status':
         case 'Novel':
@@ -285,6 +402,13 @@ class MadaraPlugin implements Plugin.PluginBase {
         .get()
         .join('\n\n')
         .trim() ||
+      loadedCheerio('.post-content_item h5:contains("Summary")')
+        .next()
+        .find('p')
+        .map((i, el) => loadedCheerio(el).text())
+        .get()
+        .join('\n\n')
+        .trim() ||
       loadedCheerio('.manga-summary p')
         .map((i, el) => loadedCheerio(el).text())
         .get()
@@ -299,10 +423,58 @@ class MadaraPlugin implements Plugin.PluginBase {
     let html = '';
 
     if (this.options?.useNewChapterEndpoint) {
-      html = await fetchApi(this.site + novelPath + 'ajax/chapters/', {
-        method: 'POST',
-        referrer: this.site + novelPath,
-      }).then(res => res.text());
+      html =
+        (initialChapterHtmlPromise ? await initialChapterHtmlPromise : '') ||
+        '';
+      if (!html) {
+        html = await fetchApi(chapterEndpointUrl, {
+          method: 'POST',
+          headers: this.requestHeaders,
+          referrer: novelUrl,
+        })
+          .then((res: Response) => res.text())
+          .catch(() => '');
+      }
+
+      const $firstPage = parseHTML(html);
+      const pageLinks = $firstPage('.pagination a[data-page]');
+      if (pageLinks.length > 0) {
+        const maxPage = Math.max(
+          ...pageLinks
+            .map((_, el) =>
+              parseInt($firstPage(el).attr('data-page') || '1', 10),
+            )
+            .get(),
+        );
+        const lastHref = pageLinks.last().attr('href') || '';
+        const queryIndex = lastHref.indexOf('?');
+        if (queryIndex !== -1) {
+          const queryTemplate = lastHref.slice(queryIndex).replace(/\d+$/, '');
+          const pageUrls: string[] = [];
+          for (let page = 2; page <= maxPage; page++) {
+            pageUrls.push(`${chapterEndpointUrl}${queryTemplate}${page}`);
+          }
+
+          const BATCH_SIZE = 6;
+          for (let i = 0; i < pageUrls.length; i += BATCH_SIZE) {
+            const batch = pageUrls.slice(i, i + BATCH_SIZE);
+            const batchResults = await Promise.all(
+              batch.map(url =>
+                fetchApi(url, {
+                  method: 'POST',
+                  headers: this.requestHeaders,
+                  referrer: novelUrl,
+                })
+                  .then((res: Response) => res.text())
+                  .catch(() => ''),
+              ),
+            );
+            for (const pageHtml of batchResults) {
+              if (pageHtml && pageHtml !== '0') html += pageHtml;
+            }
+          }
+        }
+      }
     } else {
       const novelId =
         loadedCheerio('.rating-post-id').attr('value') ||
@@ -313,45 +485,46 @@ class MadaraPlugin implements Plugin.PluginBase {
       formData.append('action', 'manga_get_chapters');
       formData.append('manga', novelId);
 
-      html = await fetchApi(this.site + 'wp-admin/admin-ajax.php', {
+      html = await fetchApi(`${baseUrl}/wp-admin/admin-ajax.php`, {
         method: 'POST',
+        headers: this.requestHeaders,
         body: formData,
-      }).then(res => res.text());
+      }).then((res: Response) => res.text());
     }
 
-    if (html !== '0') {
+    if (html !== '0' && html) {
       loadedCheerio = parseHTML(html);
     }
 
-    const totalChapters = loadedCheerio('.wp-manga-chapter').length;
-    loadedCheerio('.wp-manga-chapter').each((chapterIndex, element) => {
-      let chapterName = loadedCheerio(element).find('a').text().trim();
-      const locked = element.attribs['class'].includes('premium-block');
+    const chapterElements = loadedCheerio('.wp-manga-chapter');
+    const totalChapters = chapterElements.length;
+    const defaultDate = dayjs().format('LL');
+
+    chapterElements.each((chapterIndex, element) => {
+      const $el = loadedCheerio(element);
+      const $a = $el.find('a');
+      const chapterUrl = $a.attr('href') || '';
+
+      if (!chapterUrl || chapterUrl === '#') return;
+
+      const elementClass = (element as Element).attribs?.class || '';
+      const locked = elementClass.includes('premium-block');
+      if (locked && this.hideLocked) return;
+
+      let chapterName = $a.text().trim();
       if (locked) {
         chapterName = '🔒 ' + chapterName;
       }
 
-      let releaseDate = loadedCheerio(element)
-        .find('span.chapter-release-date')
-        .text()
-        .trim();
+      const rawDate = $el.find('span.chapter-release-date').text().trim();
+      const releaseDate = rawDate ? this.parseData(rawDate) : defaultDate;
 
-      if (releaseDate) {
-        releaseDate = this.parseData(releaseDate);
-      } else {
-        releaseDate = dayjs().format('LL');
-      }
-
-      const chapterUrl = loadedCheerio(element).find('a').attr('href') || '';
-
-      if (chapterUrl && chapterUrl != '#' && !(locked && this.hideLocked)) {
-        chapters.push({
-          name: chapterName,
-          path: chapterUrl.replace(/https?:\/\/.*?\//, '/'),
-          releaseTime: releaseDate || null,
-          chapterNumber: totalChapters - chapterIndex,
-        });
-      }
+      chapters.push({
+        name: chapterName,
+        path: chapterUrl.replace(/https?:\/\/.*?\//, ''),
+        releaseTime: releaseDate || null,
+        chapterNumber: totalChapters - chapterIndex,
+      });
     });
 
     novel.chapters = chapters.reverse();
@@ -359,12 +532,18 @@ class MadaraPlugin implements Plugin.PluginBase {
   }
 
   async parseChapter(chapterPath: string): Promise<string> {
-    const loadedCheerio = await this.getCheerio(this.site + chapterPath, false);
-    const chapterText =
-      loadedCheerio('.text-left') ||
-      loadedCheerio('.text-right') ||
-      loadedCheerio('.entry-content') ||
-      loadedCheerio('.c-blog-post > div > div:nth-child(2)');
+    const baseUrl = this.site.replace(/\/+$/, '');
+    const cleanPath = chapterPath.replace(/^\/+/, '');
+    const loadedCheerio = await this.getCheerio(
+      `${baseUrl}/${cleanPath}`,
+      false,
+    );
+    let chapterText = loadedCheerio('.text-left');
+    if (!chapterText.length) chapterText = loadedCheerio('.text-right');
+    if (!chapterText.length) chapterText = loadedCheerio('.entry-content');
+    if (!chapterText.length) {
+      chapterText = loadedCheerio('.c-blog-post > div > div:nth-child(2)');
+    }
 
     if (this.options?.customJs) {
       try {
@@ -382,82 +561,49 @@ class MadaraPlugin implements Plugin.PluginBase {
     searchTerm: string,
     pageNo?: number | undefined,
   ): Promise<Plugin.NovelItem[]> {
-    const url =
-      this.site +
-      '/page/' +
-      pageNo +
-      '/?s=' +
-      encodeURIComponent(searchTerm) +
-      '&post_type=wp-manga';
+    const baseUrl = this.site.replace(/\/+$/, '');
+    const url = `${baseUrl}/page/${pageNo ?? 1}/?s=${encodeURIComponent(searchTerm)}&post_type=wp-manga`;
     const loadedCheerio = await this.getCheerio(url, true);
-    return this.parseNovels(loadedCheerio);
+    const novels = this.parseNovels(loadedCheerio);
+    return await this.resolveNovelsCovers(novels);
   }
 
-  parseData = (date: string) => {
-    let dayJSDate = dayjs(); // today
+  parseData = (date: string): string => {
+    const cached = this.dateCache.get(date);
+    if (cached !== undefined) return cached;
+    if (this.dateCache.size > 2000) this.dateCache.clear();
+
+    const dayJSDate = dayjs(); // today
     const timeAgo = date.match(/\d+/)?.[0] || '';
     const timeAgoInt = parseInt(timeAgo, 10);
 
-    if (!timeAgo) return date; // there is no number!
-
-    if (includesAny(date, ['detik', 'segundo', 'second', 'วินาที'])) {
-      dayJSDate = dayJSDate.subtract(timeAgoInt, 'second'); // go back N seconds
-    } else if (
-      includesAny(date, [
-        'menit',
-        'dakika',
-        'min',
-        'minute',
-        'minuto',
-        'นาที',
-        'دقائق',
-      ])
-    ) {
-      dayJSDate = dayJSDate.subtract(timeAgoInt, 'minute'); // go back N minute
-    } else if (
-      includesAny(date, [
-        'jam',
-        'saat',
-        'heure',
-        'hora',
-        'hour',
-        'ชั่วโมง',
-        'giờ',
-        'ore',
-        'ساعة',
-        '小时',
-      ])
-    ) {
-      dayJSDate = dayJSDate.subtract(timeAgoInt, 'hours'); // go back N hours
-    } else if (
-      includesAny(date, [
-        'hari',
-        'gün',
-        'jour',
-        'día',
-        'dia',
-        'day',
-        'วัน',
-        'ngày',
-        'giorni',
-        'أيام',
-        '天',
-      ])
-    ) {
-      dayJSDate = dayJSDate.subtract(timeAgoInt, 'days'); // go back N days
-    } else if (includesAny(date, ['week', 'semana'])) {
-      dayJSDate = dayJSDate.subtract(timeAgoInt, 'week'); // go back N a week
-    } else if (includesAny(date, ['month', 'mes'])) {
-      dayJSDate = dayJSDate.subtract(timeAgoInt, 'month'); // go back N months
-    } else if (includesAny(date, ['year', 'año'])) {
-      dayJSDate = dayJSDate.subtract(timeAgoInt, 'year'); // go back N years
-    } else {
-      if (dayjs(date).format('LL') !== 'Invalid Date') {
-        return dayjs(date).format('LL');
-      }
-      return date;
+    if (!timeAgo) {
+      this.dateCache.set(date, date);
+      return date; // there is no number!
     }
 
-    return dayJSDate.format('LL');
+    let result: string;
+    if (SECOND_REGEX.test(date)) {
+      result = dayJSDate.subtract(timeAgoInt, 'second').format('LL');
+    } else if (MINUTE_REGEX.test(date)) {
+      result = dayJSDate.subtract(timeAgoInt, 'minute').format('LL');
+    } else if (HOUR_REGEX.test(date)) {
+      result = dayJSDate.subtract(timeAgoInt, 'hours').format('LL');
+    } else if (DAY_REGEX.test(date)) {
+      result = dayJSDate.subtract(timeAgoInt, 'days').format('LL');
+    } else if (WEEK_REGEX.test(date)) {
+      result = dayJSDate.subtract(timeAgoInt, 'week').format('LL');
+    } else if (MONTH_REGEX.test(date)) {
+      result = dayJSDate.subtract(timeAgoInt, 'month').format('LL');
+    } else if (YEAR_REGEX.test(date)) {
+      result = dayJSDate.subtract(timeAgoInt, 'year').format('LL');
+    } else {
+      const parsed = dayjs(date);
+      const formatted = parsed.format('LL');
+      result = formatted !== 'Invalid Date' ? formatted : date;
+    }
+
+    this.dateCache.set(date, result);
+    return result;
   };
 }

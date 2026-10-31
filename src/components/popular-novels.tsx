@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Filter, Zap } from 'lucide-react';
+import React, { useState } from 'react';
+import { Filter, BookOpen } from 'lucide-react';
 
 import { FiltersSheet } from '@/components/filters/filters-sheet';
 import { NovelCard } from '@/components/novel-card';
@@ -16,7 +16,7 @@ type PopularNovelsSectionProps = {
   onNavigateToParseNovel?: () => void;
 };
 
-export default function PopularNovelsSection({
+const PopularNovelsSection = React.memo(function PopularNovelsSection({
   onNavigateToParseNovel,
 }: PopularNovelsSectionProps) {
   const plugin = useAppStore(state => state.plugin);
@@ -30,14 +30,38 @@ export default function PopularNovelsSection({
   const [filterValues, setFilterValues] = useState<
     FilterToValues<Filters> | undefined
   >();
+  const [prevPluginId, setPrevPluginId] = useState<string | undefined>();
 
-  const fetchNovelsByIndex = async (index: number) => {
+  if (plugin?.id !== prevPluginId) {
+    setPrevPluginId(plugin?.id);
+    setCurrentIndex(0);
+    setMaxIndex(0);
+    setNovels([]);
+
+    if (plugin?.filters) {
+      const filters: FilterToValues<typeof plugin.filters> = {};
+      for (const fKey in plugin.filters) {
+        filters[fKey as keyof typeof filters] = {
+          type: plugin.filters[fKey].type,
+          value: plugin.filters[fKey].value,
+        };
+      }
+      setFilterValues(filters);
+    } else {
+      setFilterValues(undefined);
+    }
+  }
+
+  const fetchNovelsByIndex = async (
+    index: number,
+    latestOverride?: boolean,
+  ) => {
     if (plugin && index) {
       setLoading(true);
       try {
         const fetchedNovels = await plugin.popularNovels(index, {
           filters: filterValues || {},
-          showLatestNovels: isLatest,
+          showLatestNovels: latestOverride ?? isLatest,
         });
         if (fetchedNovels.length !== 0) {
           setCurrentIndex(index);
@@ -54,31 +78,13 @@ export default function PopularNovelsSection({
     }
   };
 
-  useEffect(() => {
-    if (plugin) {
-      setCurrentIndex(1);
-      setMaxIndex(1);
-      fetchNovelsByIndex(1);
-    }
-  }, [isLatest]);
-
-  useEffect(() => {
-    // Reset when changing plugins
+  const handleIsLatestChange = (latest: boolean) => {
+    if (isLatest === latest) return;
+    setIsLatest(latest);
     setCurrentIndex(0);
     setMaxIndex(0);
     setNovels([]);
-
-    if (plugin?.filters) {
-      const filters: FilterToValues<typeof plugin.filters> = {};
-      for (const fKey in plugin.filters) {
-        filters[fKey as keyof typeof filters] = {
-          type: plugin.filters[fKey].type,
-          value: plugin.filters[fKey].value,
-        };
-      }
-      setFilterValues(filters);
-    }
-  }, [plugin]);
+  };
 
   const handleParseNovel = (path: string) => {
     setParseNovelPath(path, true);
@@ -136,7 +142,7 @@ export default function PopularNovelsSection({
                 isLatest === (option === 'Latest') ? 'default' : 'outline'
               }
               className="cursor-pointer"
-              onClick={() => setIsLatest(option === 'Latest')}
+              onClick={() => handleIsLatestChange(option === 'Latest')}
             >
               {option}
             </Badge>
@@ -149,7 +155,7 @@ export default function PopularNovelsSection({
                 min="1"
                 max={maxIndex}
                 value={currentIndex}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                onChange={e => {
                   const page = parseInt(e.target.value);
                   if (page > 0 && page <= maxIndex) {
                     fetchNovelsByIndex(page);
@@ -182,7 +188,7 @@ export default function PopularNovelsSection({
         ) : novels.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
             <div className="rounded-full bg-muted p-4 mb-4">
-              <Zap className="w-8 h-8 text-muted-foreground" />
+              <BookOpen className="w-8 h-8 text-muted-foreground" />
             </div>
             <h3 className="text-lg font-semibold text-foreground mb-2">
               {plugin ? 'No novels to display' : 'No plugin selected'}
@@ -216,4 +222,6 @@ export default function PopularNovelsSection({
       />
     </div>
   );
-}
+});
+
+export default PopularNovelsSection;

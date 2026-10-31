@@ -2,14 +2,14 @@ import { Plugin } from '@/types/plugin';
 import { FilterTypes, Filters } from '@libs/filterInputs';
 import { fetchApi } from '@libs/fetch';
 import { NovelStatus } from '@libs/novelStatus';
-import { load as parseHTML } from 'cheerio';
+import { load as parseHTML, CheerioAPI } from 'cheerio';
 import dayjs from 'dayjs';
 
-class Jaomix implements Plugin.PluginBase {
+class Jaomix implements Plugin.PagePlugin {
   id = 'jaomix.ru';
   name = 'Jaomix';
   site = 'https://jaomix.ru';
-  version = '1.0.1';
+  version = '1.0.3';
   icon = 'src/ru/jaomix/icon.png';
 
   async popularNovels(
@@ -72,15 +72,18 @@ class Jaomix implements Plugin.PluginBase {
     return novels;
   }
 
-  async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
+  async parseNovel(
+    novelPath: string,
+  ): Promise<Plugin.SourceNovel & { totalPages: number }> {
     const body = await fetchApi(this.site + novelPath).then(res => res.text());
     const loadedCheerio = parseHTML(body);
 
-    const novel: Plugin.SourceNovel = {
+    const novel: Plugin.SourceNovel & { totalPages: number } = {
       path: novelPath,
       name: loadedCheerio('div[class="desc-book"] > h1').text().trim(),
       cover: loadedCheerio('div[class="img-book"] > img').attr('src'),
       summary: loadedCheerio('div[id="desc-tab"]').text().trim(),
+      totalPages: loadedCheerio('.sel-toc > option').length,
     };
 
     loadedCheerio('#info-book > p').each(function () {
@@ -95,28 +98,49 @@ class Jaomix implements Plugin.PluginBase {
           : NovelStatus.Completed;
       }
     });
-
-    const chapters: Plugin.ChapterItem[] = [];
-    const totalChapters = loadedCheerio('.download-chapter div.title').length;
-
-    loadedCheerio('.download-chapter div.title').each(
-      (chapterIndex, element) => {
-        const name = loadedCheerio(element).find('a').attr('title');
-        const url = loadedCheerio(element).find('a').attr('href');
-        if (!name || !url) return;
-
-        const releaseDate = loadedCheerio(element).find('time').text();
-        chapters.push({
-          name,
-          path: url.replace(this.site, ''),
-          releaseTime: this.parseDate(releaseDate),
-          chapterNumber: totalChapters - chapterIndex,
-        });
-      },
-    );
-
-    novel.chapters = chapters.reverse();
+    novel.chapters = this.parseChapters(loadedCheerio);
     return novel;
+  }
+
+  async parsePage(novelPath: string, page: string): Promise<Plugin.SourcePage> {
+    const body = await fetchApi(`${this.site}/wp-admin/admin-ajax.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Referer: this.site + novelPath,
+        Origin: this.site,
+      },
+      body: new URLSearchParams({
+        action: 'loadpagenavchapstt',
+        page,
+      }).toString(),
+    }).then(data => data.text());
+
+    const loadedCheerio = parseHTML(body);
+    const chapters = this.parseChapters(loadedCheerio);
+
+    return {
+      chapters,
+    };
+  }
+
+  parseChapters(loadedCheerio: CheerioAPI) {
+    const chapters: Plugin.ChapterItem[] = [];
+
+    loadedCheerio('div.title').each((_, element) => {
+      const name = loadedCheerio(element).find('a').attr('title');
+      const url = loadedCheerio(element).find('a').attr('href');
+      if (!name || !url) return;
+
+      const releaseDate = loadedCheerio(element).find('time').text();
+      chapters.push({
+        name,
+        path: url.replace(this.site, ''),
+        releaseTime: this.parseDate(releaseDate),
+      });
+    });
+
+    return chapters;
   }
 
   async parseChapter(chapterPath: string): Promise<string> {
@@ -125,9 +149,8 @@ class Jaomix implements Plugin.PluginBase {
     );
     const loadedCheerio = parseHTML(body);
 
-    loadedCheerio('div[class="adblock-service"]').remove();
-    const chapterText =
-      loadedCheerio('div[class="entry-content"]').html() || '';
+    loadedCheerio('.adblock-service, .lazyblock').remove();
+    const chapterText = loadedCheerio('.entry-content').html() || '';
 
     return chapterText.replace(/<a[^>]*>(.*?)<\/a>/gi, '$1');
   }
@@ -215,7 +238,7 @@ class Jaomix implements Plugin.PluginBase {
       label: 'Дата добавления:',
       value: '1',
       options: [
-        { label: 'Любое', value: '1' },
+        { label: 'Дата добавления', value: '1' },
         { label: 'От 120 до 180 дней', value: '1218' },
         { label: 'От 180 до 365 дней', value: '1836' },
         { label: 'От 30 до 60 дней', value: '3060' },
@@ -265,7 +288,6 @@ class Jaomix implements Plugin.PluginBase {
         { label: 'Романтика', value: 'Романтика' },
         { label: 'Сверхъестественное', value: 'Сверхъестественное' },
         { label: 'Сёнэн', value: 'Сёнэн' },
-        { label: 'Сёнэн-ай', value: 'Сёнэн-ай' },
         { label: 'Спорт', value: 'Спорт' },
         { label: 'Сэйнэн', value: 'Сэйнэн' },
         { label: 'Сюаньхуа', value: 'Сюаньхуа' },
@@ -278,17 +300,14 @@ class Jaomix implements Plugin.PluginBase {
         { label: 'Шоунен', value: 'Шоунен' },
         { label: 'Экшн', value: 'Экшн' },
         { label: 'Этти', value: 'Этти' },
-        { label: 'Юри', value: 'Юри' },
         { label: 'Adult', value: 'Adult' },
         { label: 'Ecchi', value: 'Ecchi' },
         { label: 'Josei', value: 'Josei' },
-        { label: 'Lolicon', value: 'Lolicon' },
         { label: 'Mature', value: 'Mature' },
         { label: 'Shoujo', value: 'Shoujo' },
         { label: 'Wuxia', value: 'Wuxia' },
         { label: 'Xianxia', value: 'Xianxia' },
         { label: 'Xuanhuan', value: 'Xuanhuan' },
-        { label: 'Yaoi', value: 'Yaoi' },
       ],
       type: FilterTypes.ExcludableCheckboxGroup,
     },

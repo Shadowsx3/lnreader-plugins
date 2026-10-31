@@ -11,7 +11,7 @@ class AuthorToday implements Plugin.PluginBase {
   name = 'Автор Тудей';
   icon = 'src/ru/authortoday/icon.png';
   site = 'https://author.today';
-  version = '1.2.1';
+  version = '1.2.3';
 
   private userAgent =
     'Mozilla/5.0 (Android 15; Mobile; rv:138.0) Gecko/138.0 Firefox/138.0';
@@ -130,7 +130,11 @@ class AuthorToday implements Plugin.PluginBase {
         ) {
           isParsingAuthor = true;
         }
-        if (name === 'div' && attribs['class'] === 'rich-content') {
+        if (
+          name === 'div' &&
+          attribs['class']?.split(' ').includes('rich-content') &&
+          !attribs['class'].includes('fr-view') // comments
+        ) {
           isReadingSummary = true;
         }
         if (name === 'br' && isReadingSummary) {
@@ -167,7 +171,7 @@ class AuthorToday implements Plugin.PluginBase {
           novel.author += data.trim() + ', ';
         }
         if (isReadingSummary) {
-          novel.summary += data.trim();
+          novel.summary += data;
         }
         if (isParsingGenres) {
           novel.genres += data;
@@ -196,6 +200,9 @@ class AuthorToday implements Plugin.PluginBase {
           isParsingAuthor = false;
           novel.author = novel.author?.slice(0, -2);
         }
+        if (name === 'p' && isReadingSummary) {
+          novel.summary += '\n\n';
+        }
         if (name === 'div' && isReadingSummary) {
           isReadingSummary = false;
         }
@@ -218,6 +225,12 @@ class AuthorToday implements Plugin.PluginBase {
     parser.write(html);
     parser.end();
 
+    novel.summary = novel.summary
+      ?.replace(/[ \t]*\n[ \t]*/g, '\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
     if (!novel.cover) {
       novel.cover = defaultCover;
     }
@@ -236,7 +249,8 @@ class AuthorToday implements Plugin.PluginBase {
       headers: { 'User-Agent': this.userAgent },
     }).then(res => res.text());
 
-    let [workID, chapterID] = chapterPath.split('/');
+    const [workID, initialChapterID] = chapterPath.split('/');
+    let chapterID = initialChapterID;
     const userRaw = html.match(/userId:(.*?),/)?.[1]?.trim();
     const userId = userRaw === 'null' ? '' : userRaw;
 

@@ -146,6 +146,17 @@ export default tseslint.config(
       '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
       'no-case-declarations': 'warn',
       'no-undef': 'error',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/lib/fetch*'],
+              message: 'Use @libs/fetch instead of @/lib/fetch',
+            },
+          ],
+        },
+      ],
     },
     languageOptions: {
       ecmaVersion: 5,
@@ -154,22 +165,41 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.{ts,tsx,mts,cts,js}'],
+    files: ['**/*.{ts,tsx,mts,cts,js,cjs}'],
     ignores: ['./plugins/*/*.ts', './plugins/multisrc/*/template.ts'],
     rules: {
       'no-unused-vars': 'off',
+      '@typescript-eslint/no-var-requires': 'off',
       '@typescript-eslint/no-unused-vars': 'warn',
       '@typescript-eslint/no-namespace': 'off',
       '@typescript-eslint/consistent-type-definitions': ['error', 'type'],
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/ban-ts-comment': 'off',
       'no-undef': 'error',
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@/lib/fetch*'],
+              message: 'Use @libs/fetch instead of @/lib/fetch',
+            },
+          ],
+        },
+      ],
     },
     languageOptions: {
       globals: {
         ...globals.serviceworker,
         ...globals.browser,
+        ...globals.node,
       },
+    },
+  },
+  {
+    files: ['**/fictioneer/custom/*/*.js'],
+    rules: {
+      'no-undef': 'off',
     },
   },
 );

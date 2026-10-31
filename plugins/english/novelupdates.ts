@@ -6,7 +6,7 @@ import { Plugin } from '@/types/plugin';
 class NovelUpdates implements Plugin.PluginBase {
   id = 'novelupdates';
   name = 'Novel Updates';
-  version = '0.9.4';
+  version = '0.9.9';
   icon = 'src/en/novelupdates/icon.png';
   customCSS = 'src/en/novelupdates/customCSS.css';
   site = 'https://www.novelupdates.com/';
@@ -196,43 +196,6 @@ class NovelUpdates implements Plugin.PluginBase {
         }
       }
       // Last edited in 0.9.0 by Batorian - 19/03/2025
-      case 'anotivereads': {
-        chapterTitle = loadedCheerio('#comic-nav-name').first().text();
-        chapterContent = loadedCheerio('#spliced-comic').html()!;
-        break;
-      }
-      // Last edited in 0.9.0 by Batorian - 19/03/2025
-      case 'arcanetranslations': {
-        bloatElements = ['.bottomnav'];
-        bloatElements.forEach(tag => loadedCheerio(tag).remove());
-        chapterTitle = loadedCheerio('.epwrapper .cat-series').first().text();
-        loadedCheerio('.entry-content div, .entry-content span').each(
-          (_, element) => {
-            const el = loadedCheerio(element);
-            const style = el.attr('style');
-            if (!style) return; // Skip elements without inline styles
-            if (/border:.*#00219b/.test(style)) {
-              el.removeAttr('style').addClass('arcane_box_blue'); // Blue box
-            } else if (/border:.*white/.test(style)) {
-              el.removeAttr('style').addClass('arcane_box_white'); // White box
-            } else if (
-              style.includes('text-transform: uppercase') &&
-              /text-shadow:.*blue/.test(style)
-            ) {
-              el.removeAttr('style').addClass('arcane_title_blue'); // Blue title
-            } else if (/text-shadow:.*blue/.test(style)) {
-              el.removeAttr('style').addClass('arcane_text_blue'); // Blue text
-            } else if (/text-shadow:.*lightyellow/.test(style)) {
-              el.removeAttr('style').addClass('arcane_text_lightyellow'); // Lightyellow text
-            } else if (/color:.*#ff00ff/.test(style)) {
-              el.removeAttr('style').addClass('arcane_text_pink'); // Pink text
-            }
-          },
-        );
-        chapterContent = loadedCheerio('.entry-content').html()!;
-        break;
-      }
-      // Last edited in 0.9.0 by Batorian - 19/03/2025
       case 'asuratls': {
         const titleElement = loadedCheerio('.post-body div b').first();
         chapterTitle = titleElement.text();
@@ -348,6 +311,16 @@ class NovelUpdates implements Plugin.PluginBase {
         chapterContent = loadedCheerio('.chapter__content').html()!;
         break;
       }
+      // Last edited in 0.9.6 by Batorian - 16/01/2026
+      case 'dreamy-translations': {
+        chapterTitle = loadedCheerio('h1 > span').first().text();
+
+        const content = loadedCheerio('.chapter-content > div').first();
+        content.children('em').wrap('<p></p>');
+
+        chapterContent = content.html()!;
+        break;
+      }
       // Last edited in 0.9.0 by Batorian - 19/03/2025
       case 'fictionread': {
         bloatElements = [
@@ -369,23 +342,26 @@ class NovelUpdates implements Plugin.PluginBase {
         chapterContent = loadedCheerio('.content').html()!;
         break;
       }
-      // Last edited in 0.9.0 by Batorian - 19/03/2025
+      // Last edited in 0.9.0 by Batorian - 19/03/2025,
+      // remove any typing in 0.9.9 by K1ngfish3r - 04/05/2026, remove this comment if no issues
       case 'genesistudio': {
         const url = `${chapterPath}/__data.json?x-sveltekit-invalidated=001`;
         try {
           // Fetch the chapter's data in JSON format
-          const json = await fetchApi(url).then(r => r.json());
+          const json = (await fetchApi(url).then(r => r.json())) as {
+            nodes: { type: string; data: Record<string, unknown> }[];
+          };
           const nodes = json.nodes;
           const data = nodes
-            .filter((node: { type: string }) => node.type === 'data')
-            .map((node: { data: any }) => node.data)[0];
+            .filter(node => node.type === 'data')
+            .map(node => node.data)[0];
           // Look for chapter container with required fields
           const contentKey = 'content';
           const notesKey = 'notes';
           const footnotesKey = 'footnotes';
           // Iterate over each property in data to find chapter containers
           for (const key in data) {
-            const mapping = data[key];
+            const mapping = data[key] as Record<string, number>;
             // Check container for keys that match the required fields
             if (
               mapping &&
@@ -395,9 +371,11 @@ class NovelUpdates implements Plugin.PluginBase {
               footnotesKey in mapping
             ) {
               // Retrieve the chapter's content, notes, and footnotes using the mapping.
-              const content = data[mapping[contentKey]];
-              const notes = data[mapping[notesKey]];
-              const footnotes = data[mapping[footnotesKey]];
+              const content = data[String(mapping[contentKey])] as string;
+              const notes = data[String(mapping[notesKey])] as string;
+              const footnotes = data[String(mapping[footnotesKey])] as
+                | string
+                | undefined;
               // Combine the parts with appropriate formatting
               chapterText =
                 content +
@@ -411,22 +389,24 @@ class NovelUpdates implements Plugin.PluginBase {
         }
         break;
       }
-      // Last edited in 0.9.0 by Batorian - 19/03/2025
-      case 'helscans': {
-        chapterTitle = loadedCheerio('.entry-title-main').first().text();
-        const chapterString_helscans =
-          'Chapter ' + chapterTitle.split('Chapter')[1].trim();
-        loadedCheerio('#readerarea.rdminimal')
-          .children()
-          .each((_, el) => {
-            const elementText = loadedCheerio(el).text();
-            if (elementText.includes(chapterString_helscans)) {
-              chapterTitle = elementText;
-              loadedCheerio(el).remove();
-              return false;
-            }
-          });
-        chapterContent = loadedCheerio('#readerarea.rdminimal').html()!;
+      // Last edited in 0.9.6 by Batorian - 16/01/2026
+      case 'greenz': {
+        const chapterSlug = chapterPath.split('/').pop();
+        const apiUrl = `https://greenz.com/api/chapters/slug/${chapterSlug}`;
+
+        try {
+          const response = await fetchApi(apiUrl);
+          const json = await response.json();
+
+          const chapterName = json.data.name;
+          const chapterNumber = json.data.chapterNumber;
+          const chapterCheerio = parseHTML(json.data.content);
+
+          chapterTitle = `Chapter ${chapterNumber} - ${chapterName}`;
+          chapterContent = chapterCheerio.html()!;
+        } catch (error) {
+          throw new Error(`Failed to parse GreenzTL chapter: ${error}`);
+        }
         break;
       }
       // Last edited in 0.9.0 by Batorian - 19/03/2025
@@ -441,7 +421,7 @@ class NovelUpdates implements Plugin.PluginBase {
         chapterContent = loadedCheerio('#chapter-content').html()!;
         break;
       }
-      // Last edited in 0.9.0 by Batorian - 19/03/2025
+      // Last edited in 0.9.5 by Batorian - 26/12/2025
       case 'infinitenoveltranslations': {
         // Get the chapter link from the main page
         const url = loadedCheerio('article > p > a').first().attr('href')!;
@@ -450,8 +430,8 @@ class NovelUpdates implements Plugin.PluginBase {
           const body = await response.text();
           loadedCheerio = parseHTML(body);
         }
-        chapterContent = loadedCheerio('.hentry').html()!;
-        chapterTitle = loadedCheerio('.page-entry-title').text();
+        chapterContent = loadedCheerio('.entry-content').html()!;
+        chapterTitle = loadedCheerio('.entry-title').text();
         break;
       }
       // Last edited in 0.9.0 by Batorian - 19/03/2025
@@ -487,6 +467,15 @@ class NovelUpdates implements Plugin.PluginBase {
         if (matchResult && matchResult[1]) {
           chapterText = matchResult[1];
         }
+        break;
+      }
+      // Last edited in 0.9.6 by Batorian - 16/01/2026
+      case 'leafstudio': {
+        chapterTitle = loadedCheerio('.title').first().text();
+        chapterContent = loadedCheerio('.chapter_content')
+          .map((_, el) => loadedCheerio(el).prop('outerHTML'))
+          .get()
+          .join('');
         break;
       }
       // Last edited in 0.9.2 by Batorian - 08/09/2025
@@ -529,12 +518,202 @@ class NovelUpdates implements Plugin.PluginBase {
         chapterContent = loadedCheerio('.entry-content').html()!;
         break;
       }
+      // Last edited in 0.9.9 by Batorian - 09/05/2026
+      case 'mythoriatales': {
+        /**
+         * Mythoria Tales uses Next.js Server Actions for chapter delivery.
+         * The response is a 'text/x-component' stream (RSC).
+         *
+         * Payload Structure:
+         * 0:{"a":"$@1",...}   -> Initialization/Metadata
+         * 2:T{hexLen},...     -> Chapter Body (may span multiple segments)
+         * 3:T{hexLen},...     -> Chapter Body continuation (if split)
+         * 1:{"success":...}   -> Series/Chapter JSON metadata (authoritative title source)
+         */
+        const html = loadedCheerio('script:contains("script-2")').html();
+        if (!html) throw new Error('Failed to find script-2');
+        const matches = Array.from(html.matchAll(/"script-2.*?[^_]+([^\\]+)/g));
+        const scriptPath = matches[1]?.[1];
+        if (!scriptPath) throw new Error('Failed to extract script-2 URL');
+
+        const scriptUrl = new URL(`/${scriptPath}`, chapterPath).href;
+        const scriptText = await (await fetchApi(scriptUrl)).text();
+        const ACTION_HASH = scriptText.match(/[a-f0-9]{42}/)?.[0];
+        if (!ACTION_HASH) throw new Error('Failed to extract ACTION_HASH');
+
+        // chapterPath: https://www.mythoriatales.com/series/[slug]/chapter/[num]
+        const urlParts = chapterPath.split('/');
+        const [slug, chapterNum] = [urlParts[4], parseInt(urlParts[6], 10)];
+
+        const response = await fetchApi(chapterPath, {
+          method: 'POST',
+          headers: {
+            'Accept': 'text/x-component',
+            'Content-Type': 'text/plain;charset=UTF-8',
+            'next-action': ACTION_HASH,
+          },
+          body: JSON.stringify([slug, chapterNum]),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch chapter: ${response.status}`);
+        }
+
+        const rscText = (await response.text()).replace(/(\d+:[{TE])/g, '\n$1');
+
+        /**
+         * 1. Isolate the data segments.
+         * We split by newline followed by a digit and a type marker ({, T, E).
+         * Using a lookahead (?=...) ensures the split marker isn't consumed,
+         * allowing us to verify the segment index (e.g., "2:").
+         */
+        const segments = rscText.split(/\n(?=\d+:[{TE])/);
+
+        /**
+         * 2. Locate and join all text content segments.
+         * Some chapters split their body across multiple T-type segments (e.g., 2:T, 3:T).
+         * We collect all of them (excluding the 0: init segment) and join into one string,
+         * stripping each segment's "{index}:T{hexLen}," prefix in the process.
+         */
+        const contentSegment = segments
+          .filter(s => /^\d+:T/.test(s) && !s.startsWith('0:'))
+          .map(s => s.replace(/^\d+:T[0-9a-f]+,/, ''))
+          .join('');
+
+        if (!contentSegment) {
+          throw new Error(
+            'Could not find the chapter content segment (2:T) in the stream.',
+          );
+        }
+
+        /**
+         * 3. Parse Lines and Paragraphs
+         * Splits on literal newlines or escaped sequence "\n".
+         * Filters out empty strings to handle double-spacing in the source.
+         */
+        const lines = contentSegment
+          .trim()
+          .split(/(?:\r?\n|\\n)+/)
+          .map((line: string) => line.trim())
+          .filter((line: string) => line.length > 0);
+
+        if (lines.length === 0) {
+          throw new Error('Parsed content is empty.');
+        }
+
+        /**
+         * 4. Extract title from the "1:{...}" metadata segment.
+         * This is the authoritative source for the chapter title and number,
+         * preferred over parsing the first content line.
+         */
+        const metaSegment = segments.find(s => s.startsWith('1:'));
+        if (metaSegment) {
+          try {
+            const meta = JSON.parse(metaSegment.slice(2)); // strip leading "1:"
+            const title = meta?.data?.chapter?.title;
+            const num = meta?.data?.chapter?.chapterNumber ?? chapterNum;
+            if (title) chapterTitle = `Chapter ${num}: ${title}`;
+          } catch {
+            // fall back to chapterNum if metadata parsing fails
+          }
+        }
+        if (!chapterTitle) chapterTitle = `Chapter ${chapterNum}`;
+
+        // 5. All lines from the content segment are paragraphs.
+        chapterContent = lines.map((p: string) => `<p>${p}</p>`).join('\n');
+
+        // Clean up custom markup tags:
+        // Format [dialogue speaker="Name"]text[/dialogue] as "Name: text", drop [sfx] blocks entirely
+        chapterContent = chapterContent
+          .replace(
+            /\[dialogue\s+speaker="([^"]*)"\](.*?)\[\/dialogue\]/gi,
+            '$1: $2',
+          )
+          .replace(/\[sfx\].*?\[\/sfx\]/gi, '')
+          .replace(/\[\/?(dialogue|sfx)[^\]]*\]/gi, '');
+
+        break;
+      }
       // Last edited in 0.9.0 by Batorian - 19/03/2025
       case 'novelplex': {
         bloatElements = ['.passingthrough_adreminder'];
         bloatElements.forEach(tag => loadedCheerio(tag).remove());
         chapterTitle = loadedCheerio('.halChap--jud').first().text();
         chapterContent = loadedCheerio('.halChap--kontenInner ').html()!;
+        break;
+      }
+      case 'novelshub': {
+        const segments = chapterPath.split('/');
+        const novelSlug = segments[segments.length - 2];
+        const chapterSlug = segments[segments.length - 1];
+        const apiUrl = `https://api.novelshub.org/api/chapter?mangaslug=${novelSlug}&chapterslug=${chapterSlug}`;
+
+        try {
+          const response = await fetchApi(apiUrl);
+          const json = await response.json();
+
+          const chapterNumber = json.chapter.number;
+          const chapterCheerio = parseHTML(json.chapter.content);
+
+          chapterTitle = `Chapter ${chapterNumber}`;
+          chapterCheerio('div').each((_, element) => {
+            const el = chapterCheerio(element);
+            const style = el.attr('style');
+            if (!style) return; // Skip elements without inline styles
+            // Orange box
+            if (/border:.*#ff6b00/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_box_orange');
+              // Orange box title
+            } else if (
+              /color:.*#ff6b00.*text-transform:.*uppercase/.test(style)
+            ) {
+              el.removeAttr('style').addClass('novels-hub_box-title_orange');
+              // Orange box text
+            } else if (/color:.*white.*border-top:.*#ff6b00/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_box-text_orange');
+              // Green box
+            } else if (/border:.*#00ff88/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_box_green');
+              // Green box title
+            } else if (
+              /color:.*#00ff88.*text-transform:.*uppercase/.test(style)
+            ) {
+              el.removeAttr('style').addClass('novels-hub_box-title_green');
+              // Green comment
+            } else if (/border-left:.*#00ff88/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_comment_green');
+              // Blue box
+            } else if (/border:.*#0066ff/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_box_blue');
+              // Blue box title
+            } else if (
+              /color:.*#0099ff.*text-transform:.*uppercase/.test(style)
+            ) {
+              el.removeAttr('style').addClass('novels-hub_box-title_blue');
+              // Blue box text
+            } else if (/color:.*#d0d0d0/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_box-text_blue');
+            }
+          });
+          chapterCheerio('span').each((_, element) => {
+            const el = chapterCheerio(element);
+            const style = el.attr('style');
+            if (!style) return; // Skip elements without inline styles
+            // Red text
+            if (/color:.*#ff6b6b/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_text_red');
+              // Blue text
+            } else if (/color:.*#4d9fff/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_text_blue');
+              // Purple text
+            } else if (/color:.*#a78bfa/.test(style)) {
+              el.removeAttr('style').addClass('novels-hub_text_purple');
+            }
+          });
+          chapterContent = chapterCheerio.html()!;
+        } catch (error) {
+          throw new Error(`Failed to parse GreenzTL chapter: ${error}`);
+        }
         break;
       }
       // Last edited in 0.9.0 by Batorian - 19/03/2025
@@ -566,6 +745,54 @@ class NovelUpdates implements Plugin.PluginBase {
           }
         });
         chapterContent = chapterCheerio.html()!;
+        break;
+      }
+      // Last edited in 0.9.8 by K1ngfish3r - 04/04/2026
+      // CF hyper aggressive or just NU shenanigans, login to patreon is 50/50
+      case 'patreon': {
+        loadedCheerio('#track-click,[class*="hidden "]').remove();
+        chapterTitle = loadedCheerio('h1[data-tag="post-title"]').text();
+        chapterContent = loadedCheerio(
+          '[data-tag="post-card"] [class*="PaddingTop"]',
+        ).html()!;
+        break;
+      }
+      // Last edited in 0.9.7 by Batorian - 18/03/2026
+      case 'r-p-d': {
+        let parts = chapterPath.split('/');
+
+        // 1. Resolve the redirect
+        const resolveRes = await fetchApi(
+          `${parts[0]}//${parts[2]}/resolve?p=/${parts.slice(3).join('/')}`,
+        );
+        const { location } = await resolveRes.json();
+        parts = location.split('/');
+        const base = `${parts[0]}//${parts[2]}`;
+
+        // 2. Get Meta & Token
+        const meta = await fetchApi(
+          `${base}/api/chapter-meta?seriesSlug=${parts[4]}&chapterSlug=${parts[5]}`,
+        ).then(r => r.json());
+        const id = meta.chapter.id;
+        const { token } = await fetchApi(
+          `${base}/api/chapters/${id}/parts-token`,
+        ).then(r => r.json());
+
+        // 3. Fetch and Wrap in <p> tags
+        let total = 1;
+        for (let i = 1; i <= total; i++) {
+          const part = await fetchApi(
+            `${base}/api/chapters/${id}/parts?index=${i}&token=${token}`,
+          ).then(r => r.json());
+
+          // Wrap the entire part content
+          // We replace \n\n with </p><p> and wrap the edges in <p> and </p>
+          const formattedPart =
+            '<p>' + part.markdown.replace(/\n\n/g, '</p><p>') + '</p>';
+
+          chapterText += formattedPart;
+          total = part.total;
+        }
         break;
       }
       // Last edited in 0.9.0 by Batorian - 19/03/2025
@@ -779,19 +1006,6 @@ class NovelUpdates implements Plugin.PluginBase {
         chapterText = await fetchApi(json).then(r => r.text());
         break;
       }
-      // Last edited in 0.9.0 by Batorian - 19/03/2025
-      case 'zetrotranslation': {
-        chapterContent = loadedCheerio('.text-left').html()!;
-        const titleElement = loadedCheerio('.text-left h2').first();
-        if (titleElement.length) {
-          chapterTitle = titleElement.text();
-          titleElement.remove();
-          chapterContent = loadedCheerio('.text-left').html()!;
-        } else if (chapterContent) {
-          chapterTitle = loadedCheerio('.active').first().text();
-        }
-        break;
-      }
     }
     if (!chapterText) {
       if (chapterTitle) {
@@ -833,40 +1047,74 @@ class NovelUpdates implements Plugin.PluginBase {
       );
     }
 
-    // Detect platforms
-    let isBlogspot = ['blogspot', 'blogger'].some(keyword =>
-      [
-        loadedCheerio('meta[name="google-adsense-platform-domain"]').attr(
-          'content',
-        ),
-        loadedCheerio('meta[name="generator"]').attr('content'),
-      ].some(meta => meta?.toLowerCase().includes(keyword)),
-    );
+    // Helper to safely check if any element matches a regex or string
+    const matches = (selector: string, attr: string | null, regex: RegExp) => {
+      let found = false;
+      loadedCheerio(selector).each((_, el) => {
+        const val = attr
+          ? loadedCheerio(el).attr(attr)
+          : loadedCheerio(el).html() || loadedCheerio(el).text();
+        if (val && regex.test(val.toLowerCase())) {
+          found = true;
+          return false;
+        }
+      });
+      return found;
+    };
 
-    let isWordPress = ['wordpress', 'site kit by google'].some(keyword =>
-      [
-        loadedCheerio('#dcl_comments-js-extra').html(),
-        loadedCheerio('meta[name="generator"]').attr('content'),
-        loadedCheerio('.powered-by').text(),
-        loadedCheerio('footer').text(),
-      ].some(meta => meta?.toLowerCase().includes(keyword)),
-    );
+    // --- WordPress Detection ---
+    let isWordPress = [
+      // 1. Meta Generator
+      matches('meta[name="generator"]', 'content', /wordpress|site kit/i),
+      // 2. Resource Paths (The most reliable way)
+      matches('link, script, img', 'src', /\/wp-content\/|\/wp-includes\//i),
+      matches('link', 'href', /\/wp-content\/|\/wp-includes\//i),
+      // 3. Header Links (REST API, RSD, etc.)
+      matches('link[rel="https://api.w.org/"]', 'href', /.*/),
+      matches('link[rel="EditURI"]', 'href', /xmlrpc\.php/i),
+      // 4. Common Body Classes
+      matches('body', 'class', /wp-admin|wp-custom-logo|logged-in/i),
+      // 5. Scripts containing WP globals
+      matches('script', null, /wp-embed|wp-emoji|wp-block/i),
+    ].some(Boolean);
 
-    // Manually set WordPress flag for known sites
-    const manualWordPress = ['etherreads', 'greenztl2', 'soafp'];
-    if (!isWordPress && domainParts.some(wp => manualWordPress.includes(wp))) {
-      isWordPress = true;
-    }
+    // --- Blogspot / Blogger Detection ---
+    let isBlogspot = [
+      // 1. Meta Tags
+      matches('meta[name="generator"]', 'content', /blogger/i),
+      matches(
+        'meta[name="google-adsense-platform-domain"]',
+        'content',
+        /blogspot/i,
+      ),
+      // 2. Feed links
+      matches(
+        'link[rel="alternate"]',
+        'href',
+        /blogger\.com\/feeds|blogspot\.com\/feeds/i,
+      ),
+      // 3. Specific Blogger CSS/Template markers
+      matches(
+        'link',
+        'href',
+        /www\.blogger\.com\/static|www\.blogger\.com\/dyn-css/i,
+      ),
+      // 4. Blogger Script Widget Manager
+      matches(
+        'script',
+        null,
+        /_WidgetManager\._Init|_WidgetManager\._RegisterWidget/i,
+      ),
+    ].some(Boolean);
 
     // Handle outlier sites
+    // Last edited in 0.9.6 - 16/01/2026
     const outliers = [
-      'anotivereads',
-      'arcanetranslations',
       'asuratls',
       'fictionread',
-      'helscans',
       'hiraethtranslation',
       'infinitenoveltranslations',
+      'leafstudio',
       'machineslicedbread',
       'mirilu',
       'novelworldtranslations',
@@ -874,14 +1122,13 @@ class NovelUpdates implements Plugin.PluginBase {
       'stabbingwithasyringe',
       'tinytranslation',
       'vampiramtl',
-      'zetrotranslation',
     ];
     if (domainParts.some(d => outliers.includes(d))) {
       isWordPress = false;
       isBlogspot = false;
     }
 
-    // Last edited in 0.9.2 - 08/09/2025
+    // Last edited in 0.9.6 - 16/01/2026
     /**
      * Blogspot sites:
      * - ¼-Assed
@@ -892,118 +1139,130 @@ class NovelUpdates implements Plugin.PluginBase {
      * - Toasteful
      *
      * WordPress sites:
-     * - Anomlaously Creative (Outlier)
-     * - Arcane Translations (Outlier)
-     * - Blossom Translation
      * - Dumah's Translations
-     * - ElloMTL
      * - Ether Reads
      * - Femme Fables
      * - Gadgetized Panda Translation
-     * - Gem Novels
      * - Goblinslate
-     * - Hel Scans (Outlier)
      * - Hiraeth Translation (Outlier)
+     * - Infinite Novel Translations (Outlier)
      * - ippotranslations
      * - JATranslations
+     * - Leaf Studio (Outlier)
      * - Light Novels Translations
      * - Machine Sliced Bread (Outlier)
      * - Mirilu - Novel Reader Attempts Translating (Outlier)
      * - Neosekai Translations
      * - Noice Translations
      * - Shanghai Fantasy
-     * - Soafp (Manually added)
+     * - Sleepy Translations
+     * - Soafp
      * - Stabbing with a Syringe (Outlier)
      * - StoneScape
      * - TinyTL (Outlier)
      * - VampiraMTL (Outlier)
      * - Wonder Novels
      * - Yong Library
-     * - Zetro Translation (Outlier)
+     * - Zetro Translation
      */
 
-    // Fetch chapter content based on detected platform
+    // Define Platform Configurations
+    const PLATFORM_CONFIG = {
+      wordpress: {
+        bloat: [
+          '.ad',
+          '.author-avatar',
+          '.chapter-warning',
+          '.entry-meta',
+          '.ezoic-ad',
+          '.mb-center',
+          '.modern-footnotes-footnote__note',
+          '.patreon-widget',
+          '.post-cats',
+          '.pre-bar',
+          '.sharedaddy',
+          '.sidebar',
+          '.swg-button-v2-light',
+          '.wp-block-buttons',
+          '.wp-dark-mode-switcher',
+          '.wp-next-post-navi',
+          '#hpk',
+          '#jp-post-flair',
+          '#textbox',
+        ],
+        title: [
+          '.entry-title',
+          '.chapter__title',
+          '.title-content',
+          '.wp-block-post-title',
+          '.title_story',
+          '#chapter-heading',
+          '.chapter-title',
+          'head title',
+          'h1:first-of-type',
+          'h2:first-of-type',
+          '.active',
+        ],
+        content: [
+          '.chapter__content',
+          '.entry-content',
+          '.text_story',
+          '.post-content',
+          '.contenta',
+          '.single_post',
+          '.main-content',
+          '.reader-content',
+          '#content',
+          '#the-content',
+          'article.post',
+          '.chp_raw',
+        ],
+      },
+      blogspot: {
+        bloat: ['.button-container', '.ChapterNav', '.ch-bottom', '.separator'],
+        title: ['.entry-title', '.post-title', 'head title'],
+        content: ['.content-post', '.entry-content', '.post-body'],
+      },
+    };
+
+    // Extraction Logic
     if (!isWordPress && !isBlogspot) {
       chapterText = await this.getChapterBody(loadedCheerio, domainParts, url);
     } else {
-      const bloatElements = isBlogspot
-        ? ['.button-container', '.ChapterNav', '.ch-bottom', '.separator']
-        : [
-            '.ad',
-            '.author-avatar',
-            '.chapter-warning',
-            '.entry-meta',
-            '.ezoic-ad',
-            '.mb-center',
-            '.modern-footnotes-footnote__note',
-            '.patreon-widget',
-            '.post-cats',
-            '.pre-bar',
-            '.sharedaddy',
-            '.sidebar',
-            '.swg-button-v2-light',
-            '.wp-block-buttons',
-            //'.wp-block-columns',
-            '.wp-dark-mode-switcher',
-            '.wp-next-post-navi',
-            '#hpk',
-            '#jp-post-flair',
-            '#textbox',
-          ];
+      const config = isWordPress
+        ? PLATFORM_CONFIG.wordpress
+        : PLATFORM_CONFIG.blogspot;
 
-      bloatElements.forEach(tag => loadedCheerio(tag).remove());
+      // Remove platform-specific bloat
+      config.bloat.forEach(tag => loadedCheerio(tag).remove());
 
-      // Extract title
-      const titleSelectors = isBlogspot
-        ? ['.entry-title', '.post-title', 'head title']
-        : [
-            '.entry-title',
-            '.chapter__title',
-            '.title-content',
-            '.wp-block-post-title',
-            '.title_story',
-            '#chapter-heading',
-            '.chapter-title',
-            'head title',
-            'h1:first-of-type',
-            'h2:first-of-type',
-            '.active',
-          ];
-      let chapterTitle = titleSelectors
-        .map(sel => loadedCheerio(sel).first().text())
-        .find(text => text);
+      // Extract Title (Simplified find)
+      let chapterTitle = config.title
+        .map(sel => loadedCheerio(sel).first().text().trim())
+        .find(text => text.length > 0);
 
-      // Extract subtitle (if any)
+      // Handle Subtitles
       const chapterSubtitle =
         loadedCheerio('.cat-series').first().text() ||
-        loadedCheerio('h1.leading-none ~ span').first().text();
+        loadedCheerio('h1.leading-none ~ span').first().text() ||
+        loadedCheerio('.breadcrumb .active').first().text();
+
       if (chapterSubtitle) chapterTitle = chapterSubtitle;
 
-      // Extract content
-      const contentSelectors = isBlogspot
-        ? ['.content-post', '.entry-content', '.post-body']
-        : [
-            '.chapter__content',
-            '.entry-content',
-            '.text_story',
-            '.post-content',
-            '.contenta',
-            '.single_post',
-            '.main-content',
-            '.reader-content',
-            '#content',
-            '#the-content',
-            'article.post',
-            '.chp_raw',
-          ];
-      const chapterContent = contentSelectors
-        .map(sel => loadedCheerio(sel).html()!)
+      // Extract Content (Scoped search)
+      const chapterContent = config.content
+        .map(sel => {
+          const el = loadedCheerio(sel).first();
+          // Ensure we don't pick up empty containers
+          return el.text().trim().length > 50 ? el.html() : null;
+        })
         .find(html => html);
 
+      // Construct Final Text
       if (chapterTitle && chapterContent) {
         chapterText = `<h2>${chapterTitle}</h2><hr><br>${chapterContent}`;
       } else {
-        chapterText = chapterContent;
+        chapterText = chapterContent || '';
       }
     }
 

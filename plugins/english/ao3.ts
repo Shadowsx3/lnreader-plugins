@@ -4,10 +4,28 @@ import { Plugin } from '@/types/plugin';
 import { Filters, FilterTypes } from '@libs/filterInputs';
 import { defaultCover } from '@libs/defaultCover';
 
+function checkResponse(res: Response, body: string, context: string) {
+  if (!res.ok) {
+    if (res.status >= 500 || res.status === 429 || res.status === 403) {
+      throw Object.assign(
+        new Error(`AO3 request timed out / blocked: HTTP ${res.status}`),
+        { status: res.status, response: res },
+      );
+    }
+    throw new Error(`Failed to ${context}: HTTP ${res.status}`);
+  }
+  if (body.includes('Retry later')) {
+    throw Object.assign(
+      new Error('AO3 rate limit: request timed out by server (Retry later)'),
+      { status: 429, response: res },
+    );
+  }
+}
+
 class ArchiveOfOurOwn implements Plugin.PluginBase {
   id = 'archiveofourown';
   name = 'Archive Of Our Own';
-  version = '1.0.3';
+  version = '1.0.5';
   icon = 'src/en/ao3/icon.png';
   site = 'https://archiveofourown.org/';
 
@@ -42,68 +60,100 @@ class ArchiveOfOurOwn implements Plugin.PluginBase {
 
   async popularNovels(
     page: number,
-    { showLatestNovels, filters }: Plugin.PopularNovelsOptions<Filters>,
+    {
+      showLatestNovels,
+      filters,
+    }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
-    // Base URL and common parameters
-    let link = `${this.site}works/search?page=${page}&work_search%5Blanguage_id%5D=en`;
+    const params = new URLSearchParams({
+      commit: 'Search',
+      page: page.toString(),
+      'work_search[language_id]': filters.language.value,
+    });
 
-    // Apply sorting based on showLatestNovels
     if (showLatestNovels) {
-      link += `&work_search%5Bsort_column%5D=revised_at&work_search%5Bsort_direction%5D=${filters.sortdir.value}`;
-    } else if (filters) {
-      link += `&work_search%5Bsort_column%5D=${filters.sort.value}&work_search%5Bsort_direction%5D=${filters.sortdir.value}`;
+      params.set('work_search[sort_column]', 'revised_at');
+    } else {
+      params.set('work_search[sort_column]', filters.sort.value);
+    }
+    params.set('work_search[sort_direction]', filters.sortdir.value);
+
+    // we could send in the entire thing without checking for blanks
+    if (filters.completion.value !== '') {
+      params.set('work_search[complete]', filters.completion.value);
+    }
+    if (filters.crossover.value !== '') {
+      params.set('work_search[crossover]', filters.crossover.value);
+    }
+    if (filters.categories.value.length > 0) {
+      filters.categories.value.forEach((category: string) => {
+        params.append('work_search[category_ids][]', category);
+      });
+    }
+    if (filters.warningsFilter.value.length > 0) {
+      filters.warningsFilter.value.forEach((warning: string) => {
+        params.append('work_search[archive_warning_ids][]', warning);
+      });
+    }
+    if (filters.singlechap.value) {
+      params.set('work_search[single_chapter]', '1');
+    }
+    if (filters.author.value !== '') {
+      params.set('work_search[creators]', filters.author.value);
+    }
+    if (
+      filters.dateFilter.value !== '' &&
+      filters.dateIncrements.value !== ''
+    ) {
+      params.set(
+        'work_search[revised_at]',
+        `${filters.dateFilter.value} ${filters.dateIncrements.value}`,
+      );
+    }
+    if (filters.words.value !== '') {
+      params.set('work_search[word_count]', filters.words.value);
+    }
+    if (filters.hits.value !== '') {
+      params.set('work_search[hits]', filters.hits.value);
+    }
+    if (filters.bookmarks.value !== '') {
+      params.set('work_search[bookmarks_count]', filters.bookmarks.value);
+    }
+    if (filters.comments.value !== '') {
+      params.set('work_search[comments_count]', filters.comments.value);
+    }
+    if (filters.kudos.value !== '') {
+      params.set('work_search[kudos_count]', filters.kudos.value);
     }
 
-    // Apply additional filters
-    if (filters) {
-      // if (filters.genre.value !== '') link += `&work_search%5Bfandom_names%5D=${filters.genre.value}`;
-      if (filters.completion.value !== '')
-        link += `&work_search%5Bcomplete%5D=${filters.completion.value}`;
-      if (filters.crossover.value !== '')
-        link += `&work_search%5Bcrossover%5D=${filters.crossover.value}`;
-      if (filters.categories.value.length > 0) {
-        filters.categories.value.forEach((category: string) => {
-          link += `&work_search%5Bcategory_ids%5D%5B%5D=${category}`;
-        });
-      }
-      if (filters.warningsFilter.value.length > 0) {
-        filters.warningsFilter.value.forEach((warning: string) => {
-          link += `&work_search%5Barchive_warning_ids%5D%5B%5D=${warning}`;
-        });
-      }
-      if (filters.singlechap.value !== '')
-        link += `&work_search%5Bsingle_chapter%5D=${filters.singlechap.value}`;
-      if (filters.author.value !== '')
-        link += `&work_search%5Bcreators%5D=${filters.author.value}`;
-      if (
-        filters.dateFilter.value !== '' &&
-        filters.dateIncrements.value !== ''
-      ) {
-        link += `&work_search%5Brevised_at%5D=${filters.dateFilter.value}+${filters.dateIncrements.value}`;
-      }
-      if (filters.words.value !== '')
-        link += `&work_search%5Bword_count%5D=${filters.words.value}`;
-      if (filters.hits.value !== '')
-        link += `&work_search%5Bhits%5D=${filters.hits.value}`;
-      if (filters.bookmarks.value !== '')
-        link += `&work_search%5Bbookmarks_count%5D=${filters.bookmarks.value}`;
-      if (filters.comments.value !== '')
-        link += `&work_search%5Bcomments_count%5D=${filters.comments.value}`;
-      if (filters.kudos.value !== '')
-        link += `&work_search%5Bkudos_count%5D=${filters.kudos.value}`;
-    }
-
-    const body = await fetchApi(link).then(r => r.text());
+    const link = `${this.site}works/search?${params.toString()}`;
+    const res = await fetchApi(link, {
+      headers: { Cookie: 'view_adult=true' },
+    });
+    const body = await res.text();
+    checkResponse(res, body, 'fetch popular novels');
     const loadedCheerio = parseHTML(body);
     return this.parseNovels(loadedCheerio);
   }
 
   async parseNovel(novelUrl: string): Promise<Plugin.SourceNovel> {
-    const result = await fetchApi(new URL(novelUrl, this.site).toString());
-    const urlchapter = novelUrl + '/navigate';
-    const chapters = await fetchApi(new URL(urlchapter, this.site).toString());
+    const novelHttpUrl = new URL(novelUrl, this.site);
+    novelHttpUrl.searchParams.set('view_adult', 'true');
+    const navHttpUrl = new URL(
+      novelHttpUrl.pathname.replace(/\/$/, '') + '/navigate',
+      this.site,
+    );
+    navHttpUrl.searchParams.set('view_adult', 'true');
+    const headers = { Cookie: 'view_adult=true' };
+
+    const [result, chapters] = await Promise.all([
+      fetchApi(novelHttpUrl.toString(), { headers }),
+      fetchApi(navHttpUrl.toString(), { headers }),
+    ]);
     const body = await result.text();
     const chapterlisttext = await chapters.text();
+    checkResponse(result, body, 'fetch novel details');
+    checkResponse(chapters, chapterlisttext, 'fetch novel chapters');
     const chapterlistload = parseHTML(chapterlisttext);
     const loadedCheerio = parseHTML(body);
 
@@ -147,115 +197,51 @@ class ArchiveOfOurOwn implements Plugin.PluginBase {
       .map(el => loadedCheerio(el).text().trim())
       .join(',');
     novel.summary = `Fandom:\n${fandom}\n\nRating:\n${rating}\n\nWarning:\n${warning}\n\nSummary:\n${summary}\n\nSeries:\n${series}\n\nRelationships:\n${relation}\n\nCharacters:\n${character}\n\nStats:\n${stats}`;
+
     const chapterItems: Plugin.ChapterItem[] = [];
-    const longReleaseDate: string[] = [];
-    let match: RegExpExecArray | null;
-    chapterlistload('ol.index').each((i, ele) => {
-      chapterlistload(ele)
-        .find('li')
-        .each((i, el) => {
-          const chapterNameMatch = chapterlistload(el).find('a').text().trim();
-          const releaseTimeText = chapterlistload(el)
-            .find('span.datetime')
-            .text()
-            .replace(/\(([^)]+)\)/g, '$1')
-            .trim();
-          const releaseTime = releaseTimeText
-            ? new Date(releaseTimeText).toISOString()
-            : '';
-          longReleaseDate.push(releaseTime);
-        });
+    chapterlistload('ol.index li').each((i, el) => {
+      const a = chapterlistload(el).find('a');
+      const href = a.attr('href')?.trim();
+      if (!href) return;
+      const releaseTimeText = chapterlistload(el)
+        .find('span.datetime')
+        .text()
+        .replace(/[()]/g, '')
+        .trim();
+      chapterItems.push({
+        name: a.text().trim() || `Chapter ${i + 1}`,
+        path: href.replace(/^\//, ''),
+        releaseTime: releaseTimeText
+          ? new Date(releaseTimeText).toISOString()
+          : null,
+      });
     });
-    const releaseTimeText = loadedCheerio('.wrapper dd.published')
-      .text()
-      .trim();
-    const releaseTime = releaseTimeText
-      ? new Date(releaseTimeText).toISOString()
-      : '';
-    let dateCounter = 0;
-    if (loadedCheerio('#chapter_index select').length > 0) {
-      loadedCheerio('#chapter_index select').each((i, selectEl) => {
-        loadedCheerio(selectEl)
-          .find('option')
-          .each((i, el) => {
-            const chapterName = loadedCheerio(el).text().trim();
-            const chapterUrlCode = loadedCheerio(el).attr('value')?.trim();
-            const chapterUrl = `${novelUrl}/chapters/${chapterUrlCode}`;
-            const releaseDate: string = longReleaseDate[dateCounter];
-            dateCounter++;
-            if (chapterUrl) {
-              chapterItems.push({
-                name: chapterName,
-                path: chapterUrl,
-                releaseTime: releaseDate,
-              });
-            }
-          });
-      });
-    }
+
     if (chapterItems.length === 0) {
-      loadedCheerio('#chapters h3.title').each((i, titleEl) => {
-        const fullTitleText = loadedCheerio(titleEl).text().trim();
-        const chapterNameMatch = fullTitleText.match(/:\s*(.*)$/);
-        let chapterName = chapterNameMatch ? chapterNameMatch[1].trim() : '';
-        const chapterUrlRaw = loadedCheerio(titleEl)
-          .find('a')
-          .attr('href')
-          ?.trim();
-        const chapterUrlCode = chapterUrlRaw?.match(/\/chapters\/(\d+)/)?.[1];
-        const chapterUrl = `${novelUrl}/chapters/${chapterUrlCode}`;
-
-        if (chapterUrl) {
-          if (chapterName === '') {
-            const novelTitle = loadedCheerio('.work .title.heading')
-              .text()
-              .trim();
-            chapterName = novelTitle;
-          }
-          chapterItems.push({
-            name: chapterName,
-            path: chapterUrl,
-            releaseTime: releaseTime,
-          });
-        }
+      const releaseTimeText = loadedCheerio('.wrapper dd.published')
+        .text()
+        .trim();
+      chapterItems.push({
+        name: novel.name,
+        path: novelUrl,
+        releaseTime: releaseTimeText
+          ? new Date(releaseTimeText).toISOString()
+          : null,
       });
-      if (chapterItems.length === 0) {
-        loadedCheerio('.work.navigation.actions li a').each((i, el) => {
-          const href = loadedCheerio(el).attr('href');
-          if (href && href.includes('/downloads/')) {
-            const chapterUrlCodeMatch = href.match(/updated_at=(\d+)/);
-            const chapterUrlCode = chapterUrlCodeMatch
-              ? chapterUrlCodeMatch[1]
-              : null;
-            let chapterName = loadedCheerio('h2.title.heading').text().trim();
-
-            const chapterUrl = `${novelUrl}/chapters/${chapterUrlCode}`;
-
-            if (chapterUrl) {
-              if (chapterName === '') {
-                const novelTitle = loadedCheerio('.work .title.heading')
-                  .text()
-                  .trim();
-                chapterName = novelTitle;
-              }
-              chapterItems.push({
-                name: chapterName,
-                path: chapterUrl,
-                releaseTime: releaseTime,
-              });
-            }
-          }
-        });
-      }
     }
-    novel.chapters = chapterItems;
 
+    novel.chapters = chapterItems;
     return novel;
   }
 
   async parseChapter(chapterUrl: string): Promise<string> {
-    const result = await fetchApi(new URL(chapterUrl, this.site).toString());
+    const chapterHttpUrl = new URL(chapterUrl, this.site);
+    chapterHttpUrl.searchParams.set('view_adult', 'true');
+    const result = await fetchApi(chapterHttpUrl.toString(), {
+      headers: { Cookie: 'view_adult=true' },
+    });
     const body = await result.text();
+    checkResponse(result, body, 'fetch chapter');
 
     const loadedCheerio = parseHTML(body);
 
@@ -273,7 +259,10 @@ class ArchiveOfOurOwn implements Plugin.PluginBase {
     });
     loadedCheerio('h3.landmark.heading#work').remove();
 
-    const chapterText = loadedCheerio('div#chapters > div').html() || '';
+    const chapterText =
+      loadedCheerio('div#chapters > div').html() ||
+      loadedCheerio('div#chapters').html() ||
+      '';
 
     return chapterText;
   }
@@ -282,10 +271,19 @@ class ArchiveOfOurOwn implements Plugin.PluginBase {
     searchTerm: string,
     page: number,
   ): Promise<Plugin.NovelItem[]> {
-    const searchUrl = `${this.site}works/search?page=${page}&work_search%5Blanguage_id%5D=en&work_search%5Bquery%5D=${encodeURIComponent(searchTerm)}`;
+    const params = new URLSearchParams({
+      commit: 'Search',
+      page: page.toString(),
+      'work_search[language_id]': 'en',
+      'work_search[query]': searchTerm,
+    });
+    const searchUrl = `${this.site}works/search?${params.toString()}`;
 
-    const result = await fetchApi(searchUrl);
+    const result = await fetchApi(searchUrl, {
+      headers: { Cookie: 'view_adult=true' },
+    });
     const body = await result.text();
+    checkResponse(result, body, 'search novels');
 
     const loadedCheerio = parseHTML(body);
     return this.parseNovels(loadedCheerio);
@@ -521,10 +519,9 @@ class ArchiveOfOurOwn implements Plugin.PluginBase {
       type: FilterTypes.CheckboxGroup,
     },
     singlechap: {
-      value: '',
+      value: false,
       label: 'Single Chapter Stories',
-      options: [{ label: 'Single Chapter', value: '1' }],
-      type: FilterTypes.Picker,
+      type: FilterTypes.Switch,
     },
     author: {
       value: '',

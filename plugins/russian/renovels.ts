@@ -3,6 +3,7 @@ import { FilterTypes, Filters } from '@libs/filterInputs';
 import { fetchApi } from '@libs/fetch';
 import { NovelStatus } from '@libs/novelStatus';
 import dayjs from 'dayjs';
+import { load as parseHTML } from 'cheerio';
 
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
@@ -11,7 +12,7 @@ class ReN implements Plugin.PluginBase {
   name = 'Renovels';
   icon = 'src/ru/renovels/icon.png';
   site = 'https://renovels.org';
-  version = '1.0.3';
+  version = '1.0.5';
 
   async popularNovels(
     pageNo: number,
@@ -20,26 +21,25 @@ class ReN implements Plugin.PluginBase {
       filters,
     }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
-    let url = this.site + '/api/v2/search/catalog/?count=30&ordering=-';
-    url += showLatestNovels ? 'chapter_date' : filters?.sort?.value || 'rating';
-
-    Object.entries(filters || {}).forEach(([type, { value }]: any) => {
-      if (value instanceof Array && value.length) {
-        url += '&' + type + '=' + value.join('&' + type + '=');
-      }
-      if (value?.include instanceof Array && value.include.length) {
-        url += '&' + type + '=' + value.include.join('&' + type + '=');
-      }
-      if (value?.exclude instanceof Array && value.exclude.length) {
-        url +=
-          '&exclude_' +
-          type +
-          '=' +
-          value.exclude.join('&exclude_' + type + '=');
-      }
+    const params = new URLSearchParams({
+      count: '30',
+      ordering: '-' + (showLatestNovels ? 'chapter_date' : filters.sort.value),
     });
 
-    url += '&page=' + pageNo;
+    for (const [type, filter] of Object.entries(filters)) {
+      const value = filter.value;
+      if (Array.isArray(value)) {
+        value.forEach(v => params.append(type, v));
+      } else if (typeof value === 'object' && value !== null) {
+        value.include?.forEach((v: string) => params.append(type, v));
+        value.exclude?.forEach((v: string) =>
+          params.append(`exclude_${type}`, v),
+        );
+      }
+    }
+
+    params.append('page', pageNo.toString());
+    const url = `${this.site}/api/v2/search/catalog/?${params.toString()}`;
 
     const { results }: { results: responseNovels[] } = await fetchApi(url).then(
       res => res.json(),
@@ -62,7 +62,7 @@ class ReN implements Plugin.PluginBase {
     const novel: Plugin.SourceNovel = {
       path: novelID,
       name: content.main_name || content.secondary_name || content.another_name,
-      summary: content.description,
+      summary: htmlToText(content.description || ''),
       cover:
         this.site +
         '/media/' +
@@ -952,6 +952,20 @@ class ReN implements Plugin.PluginBase {
 }
 
 export default new ReN();
+
+// the app shows summaries as plain text
+function htmlToText(html: string) {
+  const $ = parseHTML(html);
+  $('br').replaceWith('\n');
+  $('p, div, li, h1, h2, h3, h4, h5, h6, blockquote').after('\n\n');
+  return (
+    $.root()
+      .text()
+      .replace(/[ \t]*\n[ \t]*/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim() || undefined
+  );
+}
 
 type responseNovels = {
   id: number;

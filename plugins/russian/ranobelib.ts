@@ -5,6 +5,7 @@ import { fetchApi } from '@libs/fetch';
 import { NovelStatus } from '@libs/novelStatus';
 import { storage, localStorage } from '@libs/storage';
 import dayjs from 'dayjs';
+import { load as parseHTML } from 'cheerio';
 
 const statusKey: Record<number, string> = {
   1: NovelStatus.Ongoing,
@@ -13,19 +14,30 @@ const statusKey: Record<number, string> = {
   4: NovelStatus.Cancelled,
 };
 
+const BASE_HEADERS = {
+  Accept: 'application/json',
+  Referer: 'https://ranobelib.me',
+  Origin: 'https://ranobelib.me/',
+  'Site-Id': '3',
+  'client-time-zone':
+    Intl.DateTimeFormat().resolvedOptions?.().timeZone || 'Europe/Moscow',
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 YaBrowser/25.12.0.0 Safari/537.36',
+};
+
 class RLIB implements Plugin.PluginBase {
   id = 'RLIB';
   name = 'RanobeLib';
   site = 'https://ranobelib.me';
   apiSite = 'https://api.cdnlibs.org/api/manga/';
-  version = '2.2.1';
+  version = '2.2.8';
   icon = 'src/ru/ranobelib/icon.png';
   webStorageUtilized = true;
   imageRequestInit = {
     headers: {
+      ...BASE_HEADERS,
       Accept:
         'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-      Referer: this.site,
     },
   };
 
@@ -83,7 +95,7 @@ class RLIB implements Plugin.PluginBase {
     }
 
     const result: TopLevel = await fetchApi(url, {
-      headers: this.user?.token,
+      headers: this.getHeaders(),
     }).then(res => res.json());
 
     const novels: Plugin.NovelItem[] = [];
@@ -102,14 +114,20 @@ class RLIB implements Plugin.PluginBase {
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
     const { data }: { data: DataClass } = await fetchApi(
       `${this.apiSite}${novelPath}?fields[]=summary&fields[]=genres&fields[]=tags&fields[]=teams&fields[]=authors&fields[]=status_id&fields[]=artists`,
-      { headers: { ...this.user?.token, 'Site-Id': '3' } },
+      { headers: this.getHeaders() },
     ).then(res => res.json());
 
     const novel: Plugin.SourceNovel = {
       path: novelPath,
       name: data.rus_name || data.name,
       cover: data.cover?.default || defaultCover,
-      summary: data.summary?.trim(),
+      summary: htmlToText(
+        typeof data.summary === 'string'
+          ? data.summary
+          : data.summary?.type === 'doc'
+            ? jsonToHtml(data.summary.content, [])
+            : '',
+      ),
     };
 
     if (data.status?.id) {
@@ -141,50 +159,27 @@ class RLIB implements Plugin.PluginBase {
 
     const chaptersJSON: { data: DataChapter[] } = await fetchApi(
       `${this.apiSite}${novelPath}/chapters`,
-      { headers: this.user?.token },
+      { headers: this.getHeaders() },
     ).then(res => res.json());
 
     if (chaptersJSON.data?.length) {
-      let chapters: Plugin.ChapterItem[] = chaptersJSON.data.flatMap(chapter =>
-        chapter.branches.map(({ branch_id, created_at }) => {
-          const bId = String(branch_id ?? '0');
-          return {
-            name: `Том ${chapter.volume} Глава ${chapter.number}${
-              chapter.name ? ' ' + chapter.name.trim() : ''
-            }`,
-            path: `${novelPath}/${chapter.volume}/${chapter.number}/${bId}`,
-            releaseTime: created_at ? dayjs(created_at).format('LLL') : null,
-            chapterNumber: chapter.index,
-            page: branch_name[bId] || 'Неизвестный',
-          };
-        }),
+      const chapters: Plugin.ChapterItem[] = chaptersJSON.data.flatMap(
+        chapter =>
+          chapter.branches.map(({ branch_id, created_at }) => {
+            const bId = String(branch_id ?? '0');
+            return {
+              name: `Том ${chapter.volume} Глава ${chapter.number}${
+                chapter.name ? ' ' + chapter.name.trim() : ''
+              }`,
+              path: `${novelPath}/${chapter.volume}/${chapter.number}/${bId}`,
+              releaseTime: created_at ? dayjs(created_at).format('LLL') : null,
+              chapterNumber: chapter.index,
+              scanlator: branch_name[bId] || 'Неизвестный',
+            };
+          }),
       );
 
       if (chapters.length) {
-        const uniquePages = new Set(chapters.map(c => c.page));
-
-        if (uniquePages.size === 1) {
-          // If only one unique page value, set page to undefined for all chapters
-          // Need more investigation one app side for single page shenanigans
-          chapters = chapters.map(chapter => ({
-            ...chapter,
-            page: undefined,
-          }));
-        } else if (data.teams?.length > 1) {
-          // Original sorting logic for multiple pages, for reasons chapters overlap with one another
-          chapters.sort((chapterA, chapterB) => {
-            if (
-              chapterA.page &&
-              chapterB.page &&
-              chapterA.page !== chapterB.page
-            ) {
-              return chapterA.page.localeCompare(chapterB.page);
-            }
-            return (
-              (chapterA.chapterNumber || 0) - (chapterB.chapterNumber || 0)
-            );
-          });
-        }
         novel.chapters = chapters;
       }
     }
@@ -193,35 +188,39 @@ class RLIB implements Plugin.PluginBase {
 
   async parseChapter(chapterPath: string): Promise<string> {
     const [slug, volume, number, branch_id] = chapterPath.split('/');
-    let chapterText = '';
-
-    if (slug && volume && number) {
-      const result: { data: DataClass } = await fetchApi(
-        this.apiSite +
-          slug +
-          '/chapter?' +
-          (branch_id ? 'branch_id=' + branch_id + '&' : '') +
-          'number=' +
-          number +
-          '&volume=' +
-          volume,
-        { headers: this.user?.token },
-      ).then(res => res.json());
-      chapterText =
-        result?.data?.content?.type == 'doc'
-          ? jsonToHtml(
-              result.data.content.content,
-              result.data.attachments || [],
-            )
-          : result?.data?.content;
+    if (!slug || !volume || !number) {
+      throw new Error(`Invalid chapter path: ${chapterPath}`);
+    }
+    const url =
+      this.apiSite +
+      slug +
+      '/chapter?' +
+      (branch_id ? 'branch_id=' + branch_id + '&' : '') +
+      'number=' +
+      number +
+      '&volume=' +
+      volume;
+    const res = await fetchApi(url, { headers: this.getHeaders() });
+    if (!res.ok) {
+      throw new Error(`Could not load chapter (HTTP ${res.status})`);
+    }
+    const result: { data: DataClass } = await res.json();
+    const content = result?.data?.content;
+    const chapterText =
+      typeof content === 'object' && content?.type === 'doc'
+        ? jsonToHtml(content.content, result.data.attachments || [])
+        : (content as string) || '';
+    if (!chapterText) {
+      throw new Error('Could not load chapter');
     }
     return chapterText;
   }
 
   async searchNovels(searchTerm: string): Promise<Plugin.NovelItem[]> {
-    const url = this.apiSite + '?site_id[0]=3&q=' + searchTerm;
+    const url =
+      this.apiSite + '?site_id[0]=3&q=' + encodeURIComponent(searchTerm);
     const result: TopLevel = await fetchApi(url, {
-      headers: this.user?.token,
+      headers: this.getHeaders(),
     }).then(res => res.json());
 
     const novels: Plugin.NovelItem[] = [];
@@ -261,7 +260,9 @@ class RLIB implements Plugin.PluginBase {
   };
 
   getUser = () => {
-    const user = storage.get('user');
+    const user = storage.get('user') as
+      | { token: string; id: number }
+      | undefined;
     if (user) {
       return { token: { Authorization: 'Bearer ' + user.token }, ui: user.id };
     }
@@ -285,6 +286,17 @@ class RLIB implements Plugin.PluginBase {
       ui: data.auth.id,
     };
   };
+
+  protected getHeaders() {
+    const apiUrl = new URL(this.apiSite);
+
+    return {
+      ...BASE_HEADERS,
+      Host: apiUrl.host,
+      ...(this.user?.token || {}),
+    };
+  }
+
   user = this.getUser(); //To change the account, you need to restart the application
 
   filters = {
@@ -499,6 +511,20 @@ class RLIB implements Plugin.PluginBase {
 
 export default new RLIB();
 
+// the app shows summaries as plain text
+function htmlToText(html: string) {
+  const $ = parseHTML(html);
+  $('br').replaceWith('\n');
+  $('p, div, li, h1, h2, h3, h4, h5, h6, blockquote').after('\n\n');
+  return (
+    $.root()
+      .text()
+      .replace(/[ \t]*\n[ \t]*/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim() || undefined
+  );
+}
+
 function jsonToHtml(json: HTML[], images: Attachment[], html = '') {
   json.forEach(element => {
     switch (element.type) {
@@ -576,7 +602,11 @@ function jsonToHtml(json: HTML[], images: Attachment[], html = '') {
           '</h2>';
         break;
       case 'text':
-        html += element.text;
+        // literal text like "Ранг <S>" must not turn into tags
+        html += (element.text || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
         break;
       default:
         html += JSON.stringify(element, null, '\t'); //maybe I missed something.
@@ -636,7 +666,7 @@ type AgeRestriction = {
 
 type Branch = {
   id: number;
-  branch_id: null;
+  branch_id: number | null;
   created_at: string;
   teams: BranchTeam[];
   user: User;
@@ -673,7 +703,7 @@ type DataClass = {
   ageRestriction?: AgeRestriction;
   site?: number;
   type: string;
-  summary?: string;
+  summary?: string | { type: string; content: HTML[] };
   is_licensed?: boolean;
   teams: DataTeam[];
   genres?: Genre[];
@@ -692,7 +722,7 @@ type DataClass = {
   created_at?: string;
   moderated?: AgeRestriction;
   likes_count?: number;
-  content?: any;
+  content?: string | { type: string; content: HTML[] };
   attachments?: Attachment[];
 };
 

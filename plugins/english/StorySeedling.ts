@@ -2,14 +2,36 @@ import { CheerioAPI, load } from 'cheerio';
 import { Plugin } from '@/types/plugin';
 import { fetchApi } from '@libs/fetch';
 import { NovelStatus } from '@libs/novelStatus';
-import { defaultCover } from '@libs/defaultCover';
+import dayjs, { ManipulateType } from 'dayjs';
+
+type NovelJSON = {
+  success: boolean;
+  data: {
+    posts: {
+      title: string;
+      thumbnail: string;
+      permalink: string;
+    }[];
+  };
+};
+
+type ChapterJSON = {
+  success: boolean;
+  data: {
+    title: string;
+    url: string;
+    slug: string;
+    date: string;
+  }[];
+};
 
 class StorySeedlingPlugin implements Plugin.PluginBase {
   id = 'storyseedling';
   name = 'StorySeedling';
   icon = 'src/en/storyseedling/icon.png';
   site = 'https://storyseedling.com/';
-  version = '1.0.3';
+  version = '1.0.6';
+  nonce: string | undefined;
 
   async getCheerio(url: string, search: boolean): Promise<CheerioAPI> {
     const r = await fetchApi(url);
@@ -22,8 +44,40 @@ class StorySeedlingPlugin implements Plugin.PluginBase {
     return $;
   }
 
-  async popularNovels(pageNo: number): Promise<Plugin.NovelItem[]> {
-    const novels: Plugin.NovelItem[] = [];
+  private parseAgoDate(date: string | undefined) {
+    //parseMadaraDate
+    const parsed = dayjs(date);
+    if (date && parsed.isValid()) {
+      return parsed.toISOString();
+    }
+
+    const [amt, time, ago] = date?.toLowerCase().trim().split(/\s+/) || [];
+    const decade = time?.includes('decade'); // dayjs no support, but just in case
+    const amount = (amt === 'a' || amt === 'an' ? 1 : +amt) * (decade ? 10 : 1);
+    const unit = (decade ? 'year' : time) as ManipulateType;
+
+    const validUnits = [
+      'millisecond', // waow
+      'second',
+      'minute',
+      'hour',
+      'day',
+      'week',
+      'month',
+      'year',
+    ];
+
+    if (ago !== 'ago' || isNaN(amount) || !validUnits.includes(unit)) {
+      return null;
+    }
+
+    return dayjs().subtract(amount, unit).toISOString();
+  }
+
+  private async getNovels(
+    pageNo: number,
+    searchTerm = '',
+  ): Promise<Plugin.NovelItem[]> {
     const body = await fetchApi(this.site + 'browse').then(r => r.text());
     const loadedCheerio = load(body);
 
@@ -33,31 +87,32 @@ class StorySeedlingPlugin implements Plugin.PluginBase {
       .replace("')", '') as string;
 
     const data = new FormData();
-    data.append('search', '');
+    data.append('search', searchTerm);
     data.append('orderBy', 'recent');
     data.append('curpage', pageNo.toString());
     data.append('post', postValue);
     data.append('action', 'fetch_browse');
 
-    const response: any = await fetchApi(this.site + 'ajax', {
+    const response = (await fetchApi(this.site + 'ajax', {
       body: data,
       method: 'POST',
-    }).then(res => res.json());
+    }).then(res => res.json())) as NovelJSON;
 
-    response.data.posts.forEach((element: any) =>
-      novels.push({
-        name: element.title,
-        cover: element.thumbnail,
-        path: element.permalink.replace(this.site, ''),
-      }),
-    );
+    const novels: Plugin.NovelItem[] = response.data.posts.map(element => ({
+      name: element.title,
+      cover: element.thumbnail,
+      path: element.permalink.replace(this.site, ''),
+    }));
 
     return novels;
   }
 
+  async popularNovels(pageNo: number): Promise<Plugin.NovelItem[]> {
+    return this.getNovels(pageNo);
+  }
+
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
     const $ = await this.getCheerio(this.site + novelPath, false);
-    const baseUrl = this.site;
 
     const novel: Partial<Plugin.SourceNovel> = {
       path: novelPath,
@@ -67,7 +122,7 @@ class StorySeedlingPlugin implements Plugin.PluginBase {
     const coverUrl = $('img[x-ref="art"].w-full.rounded.shadow-md').attr('src');
 
     if (coverUrl) {
-      novel.cover = new URL(coverUrl, baseUrl).href;
+      novel.cover = new URL(coverUrl, this.site).href;
     }
 
     const genres: string[] = [];
@@ -122,7 +177,7 @@ class StorySeedlingPlugin implements Plugin.PluginBase {
         const chaptersUrl = `${this.site}${chapterListing}`;
         const refererUrl = `${this.site}${novel.path}`;
 
-        let results = await fetchApi(chaptersUrl, {
+        const results: ChapterJSON = await fetchApi(chaptersUrl, {
           method: 'POST',
           referrer: refererUrl,
           referrerPolicy: 'origin',
@@ -136,20 +191,18 @@ class StorySeedlingPlugin implements Plugin.PluginBase {
           );
 
         if (results.data) {
-          results = results.data;
-          results.forEach(function (chap: any) {
+          results.data.forEach(chap => {
             if (chap.url == null) {
               return;
             }
             const name = chap.title;
             const url = chap.url as string;
-            const releaseTime = chap.date;
             const chapterNumber = chap.slug;
 
             chapters.push({
               name: name,
-              path: url.replace(baseUrl, ''),
-              releaseTime,
+              path: url.replace(this.site, ''),
+              releaseTime: this.parseAgoDate(chap.date),
               chapterNumber: parseInt(chapterNumber),
             });
           });
@@ -162,61 +215,73 @@ class StorySeedlingPlugin implements Plugin.PluginBase {
     return novel as Plugin.SourceNovel;
   }
 
-  async parseChapter(chapterPath: string): Promise<string> {
+  async updateNonce(chapterPath: string) {
     const $ = await this.getCheerio(this.site + chapterPath, false);
+    this.nonce = $('div.mb-4:has(h1.text-xl) > div')
+      .attr('x-data')
+      ?.match(/loadChapter\('.+?', '(.+?)'\)/)![1];
+  }
 
-    const xdata = $('div[ax-load][x-data]').attr('x-data');
-
-    const t = $('div.justify-center > div.mb-4');
-    let chapterText = t.html() || '';
-
-    if (xdata) {
-      chapterText =
-        chapterText +
-        "\n\n Error parsing chapter: Turnstile detected. Advise just reading in web view until there's a fix.";
-      //   const listXdata = xdata?.split("'");
-      //   const dataNovelId = listXdata[1];
-      //   const dataNovelN = listXdata[3];
+  async parseChapter(chapterPath: string): Promise<string> {
+    const updatedNonce = !this.nonce;
+    if (!this.nonce) await this.updateNonce(chapterPath);
+    const text = await fetchApi(this.site + chapterPath + '/content', {
+      method: 'POST',
+      headers: {
+        'referrer': this.site + chapterPath + '/',
+        'x-nonce': this.nonce,
+      },
+      body: JSON.stringify({ 'captcha_response': '' }),
+    }).then(r => r.text());
+    let textJson;
+    try {
+      textJson = JSON.parse(text);
+    } catch (_) {
+      //not json :fire: we have chapter
     }
+    if (textJson && !textJson.success) {
+      if (textJson.message === 'Invalid security.') {
+        if (updatedNonce) {
+          throw new Error(`Failed to find code!`);
+        }
+        this.nonce = '';
+        return await this.parseChapter(chapterPath);
+      }
+      if (textJson.captcha) {
+        throw new Error(
+          `Failed to bypass turnstile captcha (read in webview until it stops ig)`,
+        );
+      }
+    }
+    const html = text
+      .replace(/cls[a-f0-9]+/g, '')
+      .split('')
+      .map(char => {
+        const code = char.charCodeAt(0);
+        const offset = code > 12123 ? 12027 : 12033;
+        const decoded = code - offset;
+        return decoded >= 32 && decoded <= 126
+          ? String.fromCharCode(decoded)
+          : char;
+      })
+      .join('');
+    const $ = load(html);
 
-    return chapterText;
+    $('span').text((_, txt) =>
+      txt.toLowerCase().includes('storyseedling') ||
+      txt.toLowerCase().includes('story seedling')
+        ? ''
+        : txt,
+    );
+
+    return $.html();
   }
 
   async searchNovels(
     searchTerm: string,
     pageNo: number,
   ): Promise<Plugin.NovelItem[]> {
-    const novels: Plugin.NovelItem[] = [];
-
-    const body = await fetchApi(this.site + 'browse').then(r => r.text());
-    const loadedCheerio = load(body);
-
-    const postValue = loadedCheerio('div[ax-load][x-data]')
-      .attr('x-data')
-      ?.replace("browse('", '')
-      .replace("')", '') as string;
-
-    const data = new FormData();
-    data.append('search', searchTerm);
-    data.append('orderBy', 'recent');
-    data.append('curpage', pageNo.toString());
-    data.append('post', postValue);
-    data.append('action', 'fetch_browse');
-
-    const response: any = await fetchApi(this.site + 'ajax', {
-      body: data,
-      method: 'POST',
-    }).then(res => res.json());
-
-    response.data.posts.forEach((element: any) =>
-      novels.push({
-        name: element.title,
-        cover: element.thumbnail,
-        path: element.permalink.replace(this.site, ''),
-      }),
-    );
-
-    return novels;
+    return this.getNovels(pageNo, searchTerm);
   }
 }
 

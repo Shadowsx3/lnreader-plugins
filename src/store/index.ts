@@ -1,15 +1,13 @@
 import { create, StateCreator } from 'zustand';
 import { PluginStore } from './pluginStore';
-import { DialogStore } from './dialogStore';
-import { OverlayStore } from './overlayStore';
 import { NavigationStore } from './navigationStore';
+import { IssueStore } from './issueStore';
 
-export type AppStore = DialogStore &
-  OverlayStore &
-  PluginStore &
-  NavigationStore & {
-    useSwitches: boolean;
-    setUseSwitches(value: boolean): void;
+export type AppStore = PluginStore &
+  NavigationStore &
+  IssueStore & {
+    theme: 'light' | 'dark';
+    setTheme(value: 'light' | 'dark'): void;
   };
 
 // Helper types to use "slicing" like in Redux... We could just not use slicing, but eh
@@ -17,18 +15,24 @@ export type SetStore = Parameters<StateCreator<AppStore>>[0];
 export type GetStore = Parameters<StateCreator<AppStore>>[1];
 export type StoreCreator<T> = (s: SetStore, g: GetStore) => T;
 
+const getInitialTheme = (): 'light' | 'dark' => {
+  const stored = localStorage.getItem('theme');
+  if (stored === 'light' || stored === 'dark') {
+    return stored;
+  }
+  return 'light';
+};
+
 export const useAppStore = create<AppStore>((set: SetStore, get: GetStore) => ({
-  ...DialogStore(set, get),
-  ...OverlayStore(set, get),
   ...PluginStore(set, get),
   ...NavigationStore(set, get),
-  useSwitches: !!localStorage.getItem('useSwitches'),
-  setUseSwitches(uS: boolean) {
+  ...IssueStore(set, get),
+  theme: getInitialTheme(),
+  setTheme(theme: 'light' | 'dark') {
     set(state => ({
       ...state,
-      useSwitches: uS,
+      theme,
     }));
-    if (uS) localStorage.setItem('useSwitches', 'true');
-    else localStorage.removeItem('useSwitches');
+    localStorage.setItem('theme', theme);
   },
 }));

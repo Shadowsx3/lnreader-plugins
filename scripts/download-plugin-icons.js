@@ -1,4 +1,4 @@
-/* global Buffer */
+// /* global Buffer */
 import * as fs from 'fs';
 import * as path from 'path';
 import sizeOf from 'image-size';
@@ -9,9 +9,15 @@ const minSize = 16;
 const skip = new Set([
   //custom icons
   'FWK.US',
+  'LeafStudio',
   'RNRF',
   'ReN',
+  'WTRLAB',
+  'azora',
+  'coralboutique',
+  'crimsonscrolls',
   'daonovel',
+  'dragonholic',
   'dragontea',
   'foxaholic',
   'kiniga',
@@ -21,10 +27,14 @@ const skip = new Set([
   'mysticalmerries',
   'novelTL',
   'novelsparadise',
+  'prizmatranslation',
+  'requiemtls',
   'sektenovel',
   'sonicmtl',
   'translatinotaku',
+  'universalnovel',
   'warriorlegendtrad',
+  'wuxialnscantrad',
   'wuxiaworld.site',
 ]);
 

@@ -1,5 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { BookOpen, ChevronLeft, ChevronRight, Copy, Zap } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  ArrowRight,
+  Download,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -14,12 +21,13 @@ import {
 } from '@/components/ui/tooltip';
 import { useAppStore } from '@/store';
 import { Plugin } from '@/types/plugin';
+import { useEpubExport } from '@/hooks/useEpubExport';
 
 type ParseNovelSectionProps = {
   onNavigateToParseChapter?: () => void;
 };
 
-export default function ParseNovelSection({
+const ParseNovelSection = React.memo(function ParseNovelSection({
   onNavigateToParseChapter,
 }: ParseNovelSectionProps) {
   const plugin = useAppStore(state => state.plugin);
@@ -37,6 +45,24 @@ export default function ParseNovelSection({
   const [loading, setLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [fetchError, setFetchError] = useState('');
+  const lastProcessedPath = useRef<string>();
+  const [prevPluginId, setPrevPluginId] = useState<string | undefined>();
+
+  if (plugin?.id !== prevPluginId) {
+    setPrevPluginId(plugin?.id);
+    setNovelPath('');
+    setSourceNovel(undefined);
+    setChapters([]);
+    setCurrentPage(1);
+    setFetchError('');
+  }
+
+  const { exportEpub, isExporting } = useEpubExport({
+    plugin: plugin || null,
+    sourceNovel,
+    chapters,
+    novelPath,
+  });
 
   const fetchNovelByPath = async (path: string) => {
     if (plugin && path.trim()) {
@@ -84,7 +110,7 @@ export default function ParseNovelSection({
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && novelPath.trim()) {
       fetchNovel();
     }
@@ -103,6 +129,9 @@ export default function ParseNovelSection({
   };
 
   useEffect(() => {
+    if (parseNovelPath === lastProcessedPath.current) return;
+    lastProcessedPath.current = parseNovelPath;
+
     if (parseNovelPath) {
       setNovelPath(parseNovelPath);
 
@@ -149,7 +178,7 @@ export default function ParseNovelSection({
             placeholder="Enter novel path..."
             value={novelPath}
             onChange={e => setNovelPath(e.target.value)}
-            onKeyPress={handleKeyPress}
+            onKeyDown={handleKeyDown}
             className="flex-1"
             disabled={!plugin}
           />
@@ -213,7 +242,8 @@ export default function ParseNovelSection({
                   >
                     <img
                       src={
-                        sourceNovel.cover || '/static/coverNotAvailable.webp'
+                        (sourceNovel.cover ? '/' : '') + sourceNovel.cover ||
+                        '/static/coverNotAvailable.webp'
                       }
                       alt={sourceNovel.name}
                       className="w-32 h-48 rounded-lg object-cover hover:opacity-80 transition-opacity"
@@ -266,24 +296,47 @@ export default function ParseNovelSection({
                         </div>
                       )}
                     </div>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-2 bg-transparent"
-                          onClick={() =>
-                            copyToClipboard(sourceNovel.path, 'Novel path')
-                          }
-                        >
-                          <Copy className="w-4 h-4" />
-                          Copy Path
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Copy novel path to clipboard</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    <div className="flex gap-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-2 bg-transparent"
+                            onClick={() =>
+                              copyToClipboard(sourceNovel.path, 'Novel path')
+                            }
+                          >
+                            <Copy className="w-4 h-4" />
+                            Copy Path
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Copy novel path to clipboard</p>
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-2 bg-transparent"
+                            onClick={exportEpub}
+                            disabled={isExporting || chapters.length === 0}
+                          >
+                            <Download className="w-4 h-4" />
+                            {isExporting ? 'Exporting...' : 'Export EPUB'}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>
+                            {isExporting
+                              ? 'Exporting chapters to EPUB...'
+                              : 'Export all chapters as EPUB file'}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   </div>
                 </div>
 
@@ -364,36 +417,48 @@ export default function ParseNovelSection({
             </div>
 
             {/* Chapters Table */}
-            {chapters.length > 0 && (
+            {(chapters.length > 0 || sourceNovel.totalPages) && (
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h4 className="font-semibold text-foreground">
                     Chapters ({chapters.length})
                   </h4>
-                  {sourceNovel.totalPages && sourceNovel.totalPages > 1 && (
+                  {sourceNovel.totalPages && (
                     <div className="flex items-center gap-2">
+                      {sourceNovel.totalPages > 1 && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => fetchPage(currentPage - 1)}
+                            disabled={currentPage === 1 || loading}
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                            Previous
+                          </Button>
+                          <span className="text-sm text-muted-foreground">
+                            Page {currentPage} of {sourceNovel.totalPages}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => fetchPage(currentPage + 1)}
+                            disabled={
+                              currentPage === sourceNovel.totalPages || loading
+                            }
+                          >
+                            Next
+                            <ChevronRight className="w-4 h-4" />
+                          </Button>
+                        </>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => fetchPage(currentPage - 1)}
-                        disabled={currentPage === 1 || loading}
+                        onClick={() => fetchPage(currentPage || 1)}
+                        disabled={loading}
                       >
-                        <ChevronLeft className="w-4 h-4" />
-                        Previous
-                      </Button>
-                      <span className="text-sm text-muted-foreground">
-                        Page {currentPage} of {sourceNovel.totalPages}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => fetchPage(currentPage + 1)}
-                        disabled={
-                          currentPage === sourceNovel.totalPages || loading
-                        }
-                      >
-                        Next
-                        <ChevronRight className="w-4 h-4" />
+                        {loading ? 'Fetching...' : 'Fetch Page'}
                       </Button>
                     </div>
                   )}
@@ -467,11 +532,11 @@ export default function ParseNovelSection({
                                       handleParseChapter(chapter.path)
                                     }
                                   >
-                                    <Zap className="w-3.5 h-3.5" />
+                                    <ArrowRight className="w-3.5 h-3.5" />
                                   </Button>
                                 </TooltipTrigger>
                                 <TooltipContent>
-                                  <p>Parse chapter</p>
+                                  <p>Open in Parse Chapter tab</p>
                                 </TooltipContent>
                               </Tooltip>
                             </div>
@@ -496,4 +561,6 @@ export default function ParseNovelSection({
       </Card>
     </div>
   );
-}
+});
+
+export default ParseNovelSection;

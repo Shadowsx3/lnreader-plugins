@@ -1,377 +1,326 @@
-import { load as parseHTML } from 'cheerio';
+import { CheerioAPI, load as parseHTML } from 'cheerio';
 import { fetchApi } from '@libs/fetch';
 import { Plugin } from '@/types/plugin';
+import { Filters, FilterTypes } from '@libs/filterInputs';
 import { defaultCover } from '@libs/defaultCover';
 import { NovelStatus } from '@libs/novelStatus';
 
+type ChapterGroup = {
+  label: string;
+  chapters: {
+    slug: string;
+    chapter_no: string;
+    subtitle?: string | null;
+    locked?: boolean;
+  }[];
+};
+
+/**
+ * KDT Novels replaced its LightNovelWP WordPress theme with its own Next.js
+ * site, so it no longer fits the lightnovelwp multisrc template.
+ *
+ * - Listing/search: `/search/?page=<n>&genre=<slug>&q=<term>`, 24 cards
+ *                   (`a.group`) per page, most recently updated first.
+ * - Novel page:     `/series/<slug>/`. The HTML only lists the chapters of
+ *                   the expanded volume; every volume's chapters are in the
+ *                   embedded React Server Components payload.
+ * - Chapter page:   `/<chapter-slug>/`, text in `article.reader-content`.
+ *                   VIP chapters render an unlock prompt instead.
+ */
 class KDTNovels implements Plugin.PluginBase {
   id = 'kdtnovels';
   name = 'KDT Novels';
-  version = '1.0.0';
+  version = '2.0.0';
   icon = 'src/en/kdtnovels/icon.png';
-  site = 'https://kdtnovels.com/';
+  site = 'https://kdtnovels.net/';
 
-  /**
-   * Parse novel items from HTML using common selectors
-   */
-  private parseNovelItems(html: string): Plugin.NovelItem[] {
-    const $ = parseHTML(html);
-    const novels: Plugin.NovelItem[] = [];
-
-    $('div.c-tabs-item__content').each((_, element) => {
-      const $element = $(element);
-
-      // Extract cover image
-      const coverImg = $element.find('div.tab-thumb img').first();
-      const cover =
-        coverImg.attr('data-src') || coverImg.attr('src') || defaultCover;
-
-      // Extract title and URL
-      const titleLink = $element.find('div.post-title > h3 > a').first();
-      const name = titleLink.text().trim();
-      const href = titleLink.attr('href');
-
-      // Only add if we have required data
-      if (name && href) {
-        // Convert full URL to relative path, remove leading and trailing slashes
-        const path = href.replace(this.site, '').replace(/^\/+|\/+$/g, '');
-
-        novels.push({
-          name,
-          path,
-          cover: cover || defaultCover,
-        });
-      }
-    });
-
-    return novels;
+  private async fetchHtml(url: string): Promise<string> {
+    const res = await fetchApi(url);
+    // Throw (carrying the HTTP status) so a runner-side block is reported
+    // INCONCLUSIVE per docs/testing.md instead of an empty-result FAIL.
+    if (!res.ok) {
+      throw Object.assign(new Error('Request failed: ' + res.status), {
+        status: res.status,
+      });
+    }
+    return res.text();
   }
 
-  /**
-   * Parse status text and map it to NovelStatus enum
-   */
-  private parseNovelStatus(statusText: string): string {
-    if (!statusText) {
-      return NovelStatus.Unknown;
-    }
+  private async fetchPage(url: string): Promise<CheerioAPI> {
+    return parseHTML(await this.fetchHtml(url));
+  }
 
-    const normalizedStatus = statusText.toLowerCase().trim();
+  private absolute(url: string | undefined): string | undefined {
+    if (!url) return undefined;
+    return url.startsWith('/') ? this.site + url.slice(1) : url;
+  }
 
-    // Map common status patterns to NovelStatus enum values
-    if (
-      normalizedStatus.includes('ongoing') ||
-      normalizedStatus.includes('on going')
-    ) {
-      return NovelStatus.Ongoing;
-    }
-
-    if (
-      normalizedStatus.includes('completed') ||
-      normalizedStatus.includes('complete')
-    ) {
-      return NovelStatus.Completed;
-    }
-
-    if (normalizedStatus.includes('licensed')) {
-      return NovelStatus.Licensed;
-    }
-
-    if (
-      normalizedStatus.includes('finished') ||
-      normalizedStatus.includes('publishing finished')
-    ) {
-      return NovelStatus.PublishingFinished;
-    }
-
-    if (
-      normalizedStatus.includes('cancelled') ||
-      normalizedStatus.includes('canceled')
-    ) {
-      return NovelStatus.Cancelled;
-    }
-
-    if (
-      normalizedStatus.includes('hiatus') ||
-      normalizedStatus.includes('on hiatus')
-    ) {
-      return NovelStatus.OnHiatus;
-    }
-
-    // If no pattern matches, return the original text or Unknown
-    return statusText || NovelStatus.Unknown;
+  private parseCards($: CheerioAPI): Plugin.NovelItem[] {
+    const novels: Plugin.NovelItem[] = [];
+    $('a.group[href^="/series/"]').each((_, el) => {
+      const card = $(el);
+      const title = card.find('h3');
+      novels.push({
+        name: title.attr('title') || title.text().trim(),
+        path: card.attr('href')!.slice(1),
+        cover: this.absolute(card.find('img').attr('src')) || defaultCover,
+      });
+    });
+    return novels;
   }
 
   async popularNovels(
     pageNo: number,
-    options: Plugin.PopularNovelsOptions,
+    {
+      showLatestNovels,
+      filters,
+    }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
-    // Construct URL based on whether we want latest or popular novels
-    const orderBy = options.showLatestNovels ? 'latest' : 'views';
-    const url = `${this.site}/page/${pageNo}/?s&post_type=wp-manga&m_orderby=${orderBy}`;
-
-    try {
-      // Fetch the search results page
-      const response = await fetchApi(url);
-      const html = await response.text();
-
-      // Use common parsing method
-      return this.parseNovelItems(html);
-    } catch (error) {
-      console.error('Error fetching popular novels:', error);
-      return [];
+    let url = this.site + 'search/?page=' + pageNo;
+    if (!showLatestNovels && filters.genre.value) {
+      url += '&genre=' + filters.genre.value;
     }
+    return this.parseCards(await this.fetchPage(url));
+  }
+
+  /**
+   * Reads the volume groups from the Next.js flight payload, which the page
+   * streams as `self.__next_f.push([1, "<chunk>"])` script calls.
+   */
+  private parseChapterGroups(html: string): ChapterGroup[] | undefined {
+    const pushRegex = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
+    let flight = '';
+    let match;
+    while ((match = pushRegex.exec(html))) {
+      flight += JSON.parse(match[1]);
+    }
+    for (const line of flight.split('\n')) {
+      if (!line.includes('"groups":[')) continue;
+      let row;
+      try {
+        row = JSON.parse(line.slice(line.indexOf(':') + 1));
+      } catch {
+        continue; // a text row, not a JSON one
+      }
+      const found = findGroups(row);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
+    const html = await this.fetchHtml(this.site + novelPath);
+    const $ = parseHTML(html);
+    const title = $('main h1').first();
+
+    const novel: Plugin.SourceNovel = {
+      path: novelPath,
+      name: title.text().trim() || 'Untitled',
+      cover:
+        this.absolute($('meta[property="og:image"]').attr('content')) ||
+        defaultCover,
+      genres: $('main a[href^="/search/?genre="]')
+        .map((_, el) => $(el).text().trim())
+        .get()
+        .join(', '),
+    };
+
+    const summary = $('main .reader-content').first();
+    const paragraphs = summary
+      .find('p')
+      .map((_, el) => $(el).text().trim())
+      .get()
+      .filter(Boolean);
+    novel.summary = paragraphs.length
+      ? paragraphs.join('\n\n')
+      : summary.text().trim();
+
+    // "<author> · Art: <artist>", right below the title; empty when the site
+    // has no credits for the series.
+    // The view counter that follows is a `.flex` paragraph.
+    const credits = title
+      .parent()
+      .next('p:not(.flex)')
+      .text()
+      .split(' · Art: ');
+    if (credits[0].trim()) novel.author = credits[0].trim();
+    if (credits[1]?.trim()) novel.artist = credits[1].trim();
+
+    // Only finished or paused series carry a badge next to the title; the
+    // site's series index lists the rest as ongoing.
+    const badge = title.siblings('span').first().text().trim().toLowerCase();
+    switch (badge) {
+      case '':
+        novel.status = NovelStatus.Ongoing;
+        break;
+      case 'completed':
+        novel.status = NovelStatus.Completed;
+        break;
+      case 'hiatus':
+        novel.status = NovelStatus.OnHiatus;
+        break;
+      default:
+        novel.status = NovelStatus.Unknown;
+    }
+
+    const groups = this.parseChapterGroups(html);
+    if (!groups) throw new Error('Could not find the chapter list.');
+    const chapters: Plugin.ChapterItem[] = [];
+    for (const group of groups) {
+      for (const chapter of group.chapters) {
+        let name = group.label + ' · Ch. ' + chapter.chapter_no;
+        if (chapter.subtitle) name += ': ' + chapter.subtitle;
+        chapters.push({
+          name: chapter.locked ? '🔒 ' + name : name,
+          path: chapter.slug + '/',
+          chapterNumber: chapters.length + 1,
+        });
+      }
+    }
+    novel.chapters = chapters;
+
+    return novel;
+  }
+
+  async parseChapter(chapterPath: string): Promise<string> {
+    const $ = await this.fetchPage(this.site + chapterPath);
+    const content = $('article.reader-content').first();
+    if (!content.length) {
+      if ($('main h2').text().includes('This chapter is locked')) {
+        throw new Error(
+          'This chapter is locked. Unlock it on KDT Novels to read it.',
+        );
+      }
+      throw new Error('Could not find the chapter text.');
+    }
+
+    content.find('script, style, noscript').remove();
+    // Illustrations are placeholders that the site's script swaps for images.
+    content.find('.kdt-ilus[data-ilus]').each((_, el) => {
+      const src = this.absolute($(el).attr('data-ilus'));
+      $(el).replaceWith(src ? $('<img>').attr('src', src) : '');
+    });
+
+    // The app renders this HTML as is, so drop event handlers and URLs that
+    // would run script.
+    content.find('*').each((_, el) => {
+      const node = $(el);
+      for (const name of Object.keys(el.attribs)) {
+        if (/^on/i.test(name)) {
+          node.removeAttr(name);
+        } else if (name === 'href' || name === 'src') {
+          const value = el.attribs[name]
+            .split('')
+            .filter(c => c.charCodeAt(0) > 32)
+            .join('')
+            .toLowerCase();
+          if (
+            /^(javascript|vbscript):/.test(value) ||
+            (value.startsWith('data:') && !value.startsWith('data:image/'))
+          ) {
+            node.removeAttr(name);
+          }
+        }
+      }
+    });
+    return content.html() || '';
   }
 
   async searchNovels(
     searchTerm: string,
     pageNo: number,
   ): Promise<Plugin.NovelItem[]> {
-    // Construct search URL with proper query parameters
-    const url = `${this.site}/page/${pageNo}/?s=${encodeURIComponent(searchTerm)}&post_type=wp-manga&op&author&artist&release&adult`;
-
-    try {
-      // Fetch the search results page
-      const response = await fetchApi(url);
-      const html = await response.text();
-
-      // Use common parsing method
-      const novels = this.parseNovelItems(html);
-
-      // Handle empty search results gracefully
-      if (novels.length === 0) {
-        console.log(
-          `No search results found for term: "${searchTerm}" on page ${pageNo}`,
-        );
-      }
-
-      return novels;
-    } catch (error) {
-      console.error('Error searching novels:', error);
-      return [];
-    }
+    const $ = await this.fetchPage(
+      this.site +
+        'search/?q=' +
+        encodeURIComponent(searchTerm.trim()) +
+        '&page=' +
+        pageNo,
+    );
+    return this.parseCards($);
   }
 
-  async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
-    const novelUrl = this.site + novelPath;
+  resolveUrl = (path: string) => this.site + path;
 
-    try {
-      // Fetch the novel details page
-      const response = await fetchApi(novelUrl);
-      const html = await response.text();
+  filters = {
+    genre: {
+      label: 'Genre',
+      value: '',
+      options: [
+        { label: 'All', value: '' },
+        { label: 'Action', value: 'action' },
+        { label: 'Adult', value: 'adult' },
+        { label: 'Adventure', value: 'adventure' },
+        { label: 'Battle Royale', value: 'battle-royale' },
+        { label: 'Childhood Friends', value: 'childhood-friends' },
+        { label: 'Cohabitation', value: 'cohabitation' },
+        { label: 'Comedy', value: 'comedy' },
+        { label: 'Drama', value: 'drama' },
+        { label: 'Ecchi', value: 'ecchi' },
+        { label: 'Fantasy', value: 'fantasy' },
+        { label: 'Gender Bender', value: 'gender-bender' },
+        { label: 'Genderswap', value: 'genderswap' },
+        { label: 'Gore', value: 'gore' },
+        { label: 'Harem', value: 'harem' },
+        { label: 'Horror', value: 'horror' },
+        { label: 'Idol', value: 'idol' },
+        { label: 'Isekai', value: 'isekai' },
+        { label: 'Isekai reincarnation', value: 'isekai-reincarnation' },
+        { label: 'Magic', value: 'magic' },
+        { label: 'Martial Arts', value: 'martial-arts' },
+        { label: 'Mature', value: 'mature' },
+        { label: 'Mecha', value: 'mecha' },
+        { label: 'Monster Girls', value: 'monster-girls' },
+        { label: 'Monsters', value: 'monsters' },
+        { label: 'Mystery', value: 'mystery' },
+        { label: 'Parallel world', value: 'parallel-world' },
+        { label: 'Psychological', value: 'psychological' },
+        { label: 'Psychological drama', value: 'psychological-drama' },
+        { label: 'Reincarnation', value: 'reincarnation' },
+        { label: 'Romance', value: 'romance' },
+        { label: 'Romance school', value: 'romance-school' },
+        { label: 'Romantic Comedy', value: 'romantic-comedy' },
+        { label: 'School', value: 'school' },
+        { label: 'School Life', value: 'school-life' },
+        { label: 'Sci-fi', value: 'sci-fi' },
+        { label: 'Seinen', value: 'seinen' },
+        { label: 'Sexual Violence', value: 'sexual-violence' },
+        { label: 'Shonen', value: 'shonen' },
+        { label: 'Shota', value: 'shota' },
+        { label: 'Shoujo Ai', value: 'shoujo-ai' },
+        { label: 'Shounen', value: 'shounen' },
+        { label: 'Slice of Life', value: 'slice-of-life' },
+        { label: 'Smut', value: 'smut' },
+        { label: 'Supernatural', value: 'supernatural' },
+        { label: 'Survival', value: 'survival' },
+        { label: 'Time Travel', value: 'time-travel' },
+        { label: 'Tragedy', value: 'tragedy' },
+        { label: 'Villainess Otome Game', value: 'villainess-otome-game' },
+        { label: 'Yamikawa', value: 'yamikawa' },
+        { label: 'Youth', value: 'youth' },
+        { label: 'Yuri', value: 'yuri' },
+      ],
+      type: FilterTypes.Picker,
+    },
+  } satisfies Filters;
+}
 
-      // Parse HTML with Cheerio
-      const $ = parseHTML(html);
-
-      const novel: Plugin.SourceNovel = {
-        name: '',
-        path: novelPath,
-        cover: defaultCover,
-        author: '',
-        artist: '',
-        genres: '',
-        summary: '',
-        status: '',
-        chapters: [],
-      };
-
-      // Extract novel metadata using provided CSS selectors
-
-      // Extract novel title
-      const titleElement = $('.manga-title').first();
-      novel.name = titleElement.text().trim() || 'Unknown Title';
-
-      // Extract cover image
-      const coverElement = $('div.summary_image img').first();
-      const coverSrc =
-        coverElement.attr('data-src') || coverElement.attr('src');
-      novel.cover = coverSrc || defaultCover;
-
-      // Extract genres
-      const genreElements = $('div.genres-content a');
-      const genres: string[] = [];
-      genreElements.each((_, element) => {
-        const genre = $(element).text().trim();
-        if (genre) {
-          genres.push(genre);
-        }
-      });
-      novel.genres = genres.join(',');
-
-      // Extract summary/synopsis
-      const summaryElements = $('div.manga-excerpt p');
-      const summaryParts: string[] = [];
-      summaryElements.each((_, element) => {
-        const text = $(element).text().trim();
-        if (text) {
-          summaryParts.push(text);
-        }
-      });
-      novel.summary = summaryParts.join('\n\n');
-
-      // Extract status
-      const statusElement = $('div.manga-status span:nth-child(2)').first();
-      const rawStatus = statusElement.text().trim();
-      novel.status = this.parseNovelStatus(rawStatus);
-
-      // Extract chapter list - chapters are loaded dynamically via AJAX
-      let chapters: Plugin.ChapterItem[] = [];
-
-      try {
-        // Construct AJAX URL for chapter list
-        const ajaxUrl = `${novelUrl}/ajax/chapters/?t=1`;
-
-        // Make POST request to get chapter list HTML fragment
-        const chapterResponse = await fetchApi(ajaxUrl, {
-          method: 'POST',
-        });
-        const chapterHtml = await chapterResponse.text();
-
-        // Parse the HTML fragment
-        const $chapters = parseHTML(chapterHtml);
-
-        // Extract chapters using existing parsing logic
-        const chapterElements = $chapters('li.free-chap');
-
-        chapterElements.each((index, element) => {
-          const $element = $chapters(element);
-
-          // Extract chapter link and name
-          const chapterLink = $element.find('a').first();
-          const chapterName = chapterLink.text().trim();
-          const chapterHref = chapterLink.attr('href');
-
-          // Extract release date
-          const releaseDateElement = $element
-            .find('span.chapter-release-date')
-            .first();
-          const releaseTime = releaseDateElement.text().trim() || null;
-
-          // Extract chapter number from title (opportunistic parsing)
-          let chapterNumber = chapterElements.length - index; // Default fallback (reverse order)
-
-          // Try multiple patterns for chapter number extraction (supporting decimals)
-          let chapterNumberMatch = chapterName.match(/Ch\s*(\d+(?:\.\d+)?)/i);
-          if (!chapterNumberMatch) {
-            chapterNumberMatch = chapterName.match(/c(\d+(?:\.\d+)?)/i);
-          }
-          if (chapterNumberMatch) {
-            chapterNumber = parseFloat(chapterNumberMatch[1]);
-          }
-
-          if (chapterName && chapterHref) {
-            // Extract just the pathname from the URL, removing leading and trailing slashes
-            let chapterPath: string;
-            if (chapterHref.startsWith('http')) {
-              const url = new URL(chapterHref);
-              chapterPath = url.pathname.replace(/^\/+|\/+$/g, '');
-            } else {
-              chapterPath = chapterHref.replace(/^\/+|\/+$/g, '');
-            }
-
-            chapters.push({
-              name: chapterName,
-              path: chapterPath,
-              releaseTime: releaseTime,
-              chapterNumber: chapterNumber,
-            });
-          }
-        });
-
-        // Reverse the chapters array since they come in reverse order (latest first)
-        chapters.reverse();
-      } catch (chapterError) {
-        console.error('Error fetching chapter list:', chapterError);
-        // Fall back to empty chapters array if AJAX request fails
-        chapters = [];
-      }
-
-      novel.chapters = chapters;
-
-      return novel;
-    } catch (error) {
-      console.error('Error parsing novel:', error);
-      // Return basic novel object with minimal data on error
-      return {
-        name: 'Error loading novel',
-        path: novelPath,
-        cover: defaultCover,
-        chapters: [],
-      };
-    }
+/** Finds the first `groups` array of chapter groups in a flight row. */
+function findGroups(node: unknown): ChapterGroup[] | undefined {
+  if (!node || typeof node !== 'object') return undefined;
+  const record = node as Record<string, unknown>;
+  const groups = record.groups;
+  if (
+    Array.isArray(groups) &&
+    groups.every(group => Array.isArray(group?.chapters))
+  ) {
+    return groups as ChapterGroup[];
   }
-
-  async parseChapter(chapterPath: string): Promise<string> {
-    const chapterUrl = this.site + chapterPath;
-
-    try {
-      // Implement HTTP request to fetch chapter page
-      const response = await fetchApi(chapterUrl);
-      const html = await response.text();
-
-      // Parse HTML with Cheerio
-      const $ = parseHTML(html);
-
-      // Identify main chapter content container using CSS selectors
-      const contentContainer = $('div.reading-content').first();
-
-      if (contentContainer.length === 0) {
-        console.warn('Chapter content container not found');
-        return '';
-      }
-
-      // Remove hidden input elements used for tracking (infinite scrolling)
-      contentContainer.find('input[type="hidden"]').remove();
-
-      // Handle embedded images - ensure they have proper attributes
-      contentContainer.find('img').each((_, img) => {
-        const $img = $(img);
-
-        // Handle lazy-loaded images by moving data-src to src if needed
-        const dataSrc = $img.attr('data-src');
-        if (dataSrc && !$img.attr('src')) {
-          $img.attr('src', dataSrc);
-        }
-
-        // Ensure images have alt text for accessibility
-        if (!$img.attr('alt')) {
-          $img.attr('alt', 'Chapter image');
-        }
-      });
-
-      // Handle special formatting elements - preserve paragraph structure
-      // Ensure proper spacing between paragraphs and other block elements
-      contentContainer.find('p, div, br').each((_, element) => {
-        const $element = $(element);
-
-        // Ensure paragraphs have proper spacing
-        if (element.tagName?.toLowerCase() === 'p' && $element.text().trim()) {
-          // Paragraph already has proper HTML structure
-        }
-
-        // Handle div elements that might contain text
-        if (
-          element.tagName?.toLowerCase() === 'div' &&
-          $element.text().trim()
-        ) {
-          // Preserve div structure for special formatting
-        }
-      });
-
-      // Extract the HTML content while preserving formatting
-      let chapterContent = contentContainer.html();
-
-      // Filter out HTML comments
-      if (chapterContent) {
-        chapterContent = chapterContent.replace(/<!--[\s\S]*?-->/g, '');
-      }
-
-      // Return properly formatted HTML string
-      return chapterContent?.trim() || '';
-    } catch (error) {
-      console.error('Error parsing chapter:', error);
-      return '';
-    }
+  for (const key in record) {
+    const found = findGroups(record[key]);
+    if (found) return found;
   }
+  return undefined;
 }
 
 export default new KDTNovels();

@@ -153,7 +153,9 @@
       }
     },
     "options": {
-      "lang": "ru"
+      "lang": "ru",
+      "down": true,
+      "downSince": 1792779205411
     }
   },
   {
@@ -233,7 +235,9 @@
       }
     },
     "options": {
-      "lang": "es"
+      "lang": "es",
+      "down": true,
+      "downSince": 1768289212956
     }
   },
   {
@@ -313,7 +317,9 @@
       }
     },
     "options": {
-      "lang": "pt"
+      "lang": "pt",
+      "down": true,
+      "downSince": 1768289212942
     }
   },
   {
@@ -381,7 +387,9 @@
       }
     },
     "options": {
-      "lang": "th"
+      "lang": "th",
+      "down": true,
+      "downSince": 1768289212962
     }
   }
 ]

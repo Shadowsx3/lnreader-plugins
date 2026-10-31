@@ -4,6 +4,8 @@ on:
   issues:
     types: [labeled]
 
+permissions: {}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.issue.number }}
   cancel-in-progress: true
@@ -11,8 +13,10 @@ concurrency:
 jobs:
   auto-label:
     name: Auto Label Theme
-    if: contains(github.event.issue.labels.*.name, 'Plugin Request')
+    if: contains(github.event.issue.labels.*.name, 'plugin request')
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
     env:
       REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -109,6 +113,7 @@ jobs:
           fi
 
       - name: Add Theme Label To Issue
+        id: add_theme_label
         if: always()
         env:
           MADARA: ${{ steps.check_madara.outputs.madara }}
@@ -119,17 +124,17 @@ jobs:
         run: |
           echo "## Theme Detection Result" >> $GITHUB_STEP_SUMMARY
           if [[ "$MADARA" == "true" ]]; then
-            echo "🏷️ Adding label: Theme: Madara" >> $GITHUB_STEP_SUMMARY
-            gh issue edit $ISSUE_NUMBER --add-label "Theme: Madara" -R $REPO
+            echo "🏷️ Adding label: theme: madara" >> $GITHUB_STEP_SUMMARY
+            gh issue edit $ISSUE_NUMBER --add-label "theme: madara" -R $REPO
           elif [[ "$LIGHNOVELWP" == "true" ]]; then
-            echo "🏷️ Adding label: Theme: Lighnovelwp" >> $GITHUB_STEP_SUMMARY
-            gh issue edit $ISSUE_NUMBER --add-label "Theme: Lighnovelwp" -R $REPO
+            echo "🏷️ Adding label: theme: lighnovelwp" >> $GITHUB_STEP_SUMMARY
+            gh issue edit $ISSUE_NUMBER --add-label "theme: lighnovelwp" -R $REPO
           elif [[ "$HOTNOVELPUB" == "true" ]]; then
-            echo "🏷️ Adding label: Theme: Hotnovelpub" >> $GITHUB_STEP_SUMMARY
-            gh issue edit $ISSUE_NUMBER --add-label "Theme: Hotnovelpub" -R $REPO
+            echo "🏷️ Adding label: theme: hotnovelpub" >> $GITHUB_STEP_SUMMARY
+            gh issue edit $ISSUE_NUMBER --add-label "theme: hotnovelpub" -R $REPO
           elif [[ "$FICTIONEER" == "true" ]]; then
-            echo "🏷️ Adding label: Theme: Fictioneer" >> $GITHUB_STEP_SUMMARY
-            gh issue edit $ISSUE_NUMBER --add-label "Theme: Fictioneer" -R $REPO
+            echo "🏷️ Adding label: theme: fictioneer" >> $GITHUB_STEP_SUMMARY
+            gh issue edit $ISSUE_NUMBER --add-label "theme: fictioneer" -R $REPO
           else
             echo "❌ No Theme Detected" >> $GITHUB_STEP_SUMMARY
           fi
