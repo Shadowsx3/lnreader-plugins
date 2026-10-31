@@ -9,7 +9,7 @@ class NovaPlugin implements Plugin.PluginBase {
   name = 'NOVA';
   icon = 'src/es/nova/icon.png';
   site = 'https://novelasligeras.net';
-  version = '1.1.1';
+  version = '1.1.2';
 
   // Regex para parsear títulos de capítulos
   private readonly CHAPTER_REGEX = /(Parte \d+) . (.+?): (.+)/;
@@ -132,7 +132,9 @@ class NovaPlugin implements Plugin.PluginBase {
       if (Array.isArray(data)) {
         data.forEach(novel => {
           const path = novel.url?.replace(this.site, '') || '';
-          const name = novel.title || '';
+          // El endpoint AJAX devuelve los títulos con entidades HTML
+          // (p. ej. "&hellip;"), hay que decodificarlas.
+          const name = this.htmlToText(novel.title);
           const cover = novel.thumbnail || '';
 
           if (name && path) {
@@ -184,7 +186,11 @@ class NovaPlugin implements Plugin.PluginBase {
       .trim()
       .toLowerCase();
     let status = '';
-    if (statusText.includes('en curso') || statusText.includes('ongoing')) {
+    if (
+      statusText.includes('en curso') ||
+      statusText.includes('en proceso') ||
+      statusText.includes('ongoing')
+    ) {
       status = NovelStatus.Ongoing;
     } else if (
       statusText.includes('completado') ||
@@ -283,7 +289,9 @@ class NovaPlugin implements Plugin.PluginBase {
     const $clean = cheerio.load(chapterContent);
     $clean('script, style, iframe, .ads, .advertisement').remove();
 
-    return $clean.html() || chapterContent;
+    // Devolver solo el contenido del <body>: cheerio.load() reenvuelve el
+    // fragmento en <html><head></head><body>, que no es lo que espera el lector.
+    return $clean('body').html() || chapterContent;
   }
 }
 
